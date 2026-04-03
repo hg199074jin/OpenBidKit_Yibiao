@@ -132,7 +132,7 @@ def create_requirements():
     print("创建requirements文件...")
     print("="*50)
     
-requirements = """
+    requirements = """
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
 python-multipart==0.0.20

@@ -56,9 +56,9 @@ class AnalysisRequest(BaseModel):
 class OutlineItem(BaseModel):
     """目录项"""
 
-    id: str = ""
-    title: str = ""
-    description: str = ""
+    id: str
+    title: str
+    description: str
     children: Optional[List["OutlineItem"]] = None
     content: Optional[str] = None
 
@@ -114,9 +114,22 @@ class ErrorResponse(BaseModel):
     detail: Optional[str] = None
 
 
+class WordExportOutlineItem(BaseModel):
+    """Word 导出用目录项。"""
+
+    id: str
+    title: str
+    description: Optional[str] = None
+    children: Optional[List["WordExportOutlineItem"]] = None
+    content: Optional[str] = None
+
+
+WordExportOutlineItem.model_rebuild()
+
+
 class WordExportRequest(BaseModel):
     """Word导出请求"""
 
     project_name: Optional[str] = Field(None, description="项目名称")
     project_overview: Optional[str] = Field(None, description="项目概述")
-    outline: List[OutlineItem] = Field(..., description="目录结构，包含内容")
+    outline: List[WordExportOutlineItem] = Field(..., description="目录结构，包含内容")

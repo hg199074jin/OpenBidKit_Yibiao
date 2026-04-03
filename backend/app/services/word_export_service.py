@@ -9,7 +9,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Pt
 
-from ..models.schemas import OutlineItem, WordExportRequest
+from ..models.schemas import WordExportOutlineItem, WordExportRequest
 
 
 def _set_run_font_simsun(run: docx.text.run.Run) -> None:
@@ -232,7 +232,7 @@ class WordExportService:
 
     @staticmethod
     def _add_outline_items(
-        doc: docx.Document, items: list[OutlineItem], level: int = 1
+        doc: docx.Document, items: list[WordExportOutlineItem], level: int = 1
     ) -> None:
         for item in items:
             if level <= 3:
