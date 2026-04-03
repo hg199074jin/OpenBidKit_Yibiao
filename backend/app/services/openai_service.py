@@ -2,10 +2,12 @@
 
 import json
 import logging
+import uuid
 from typing import Any, AsyncGenerator, Dict, List
 
 import openai
 
+from ..config import settings
 from ..utils import prompt_manager
 from ..utils.config_manager import config_manager
 from ..utils.errors import AppError
@@ -27,6 +29,120 @@ class OpenAIService:
             api_key=self.api_key,
             base_url=self.base_url or None,
         )
+
+    def _chat_endpoint_url(self) -> str:
+        """获取聊天完成接口地址。"""
+        base_url = (self.base_url or "https://api.openai.com/v1").rstrip("/")
+        return f"{base_url}/chat/completions"
+
+    def _log_ai_request(
+        self,
+        request_id: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        response_format: dict | None,
+    ) -> None:
+        """记录 AI 请求日志。"""
+        if not settings.enable_file_logging:
+            return
+
+        logger.debug(
+            "AI_REQUEST %s",
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "url": self._chat_endpoint_url(),
+                    "model": self.model_name,
+                    "temperature": temperature,
+                    "response_format": response_format,
+                    "messages": messages,
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+    def _log_ai_response(self, request_id: str, content: str) -> None:
+        """记录 AI 响应日志。"""
+        if not settings.enable_file_logging:
+            return
+
+        logger.debug(
+            "AI_RESPONSE %s",
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "url": self._chat_endpoint_url(),
+                    "model": self.model_name,
+                    "content": content,
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+    def _log_ai_raw_response(
+        self,
+        request_id: str,
+        raw_chunks: list[dict[str, Any]],
+        content: str,
+    ) -> None:
+        """记录 AI 接口原始响应日志。"""
+        if not settings.enable_file_logging:
+            return
+
+        logger.debug(
+            "AI_RAW_RESPONSE %s",
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "url": self._chat_endpoint_url(),
+                    "model": self.model_name,
+                    "raw_chunks": raw_chunks,
+                    "content": content,
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+        )
+
+    def _log_ai_error(
+        self,
+        request_id: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        response_format: dict | None,
+        partial_content: str,
+        raw_chunks: list[dict[str, Any]],
+        error: Exception,
+    ) -> None:
+        """记录 AI 异常日志。"""
+        if not settings.enable_file_logging:
+            return
+
+        logger.debug(
+            "AI_ERROR %s",
+            json.dumps(
+                {
+                    "request_id": request_id,
+                    "url": self._chat_endpoint_url(),
+                    "model": self.model_name,
+                    "temperature": temperature,
+                    "response_format": response_format,
+                    "messages": messages,
+                    "partial_content": partial_content,
+                    "raw_chunks": raw_chunks,
+                    "error": str(error),
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+        )
+
+    @staticmethod
+    def _dump_chunk(chunk: Any) -> dict[str, Any]:
+        """序列化 OpenAI SDK 返回的 chunk。"""
+        if hasattr(chunk, "model_dump"):
+            return chunk.model_dump(mode="json")
+        return {"raw": str(chunk)}
 
     async def get_available_models(self) -> List[str]:
         """获取可用模型列表。"""
@@ -52,6 +168,11 @@ class OpenAIService:
         response_format: dict | None = None,
     ) -> AsyncGenerator[str, None]:
         """流式调用聊天完成接口。"""
+        request_id = uuid.uuid4().hex
+        parts: list[str] = []
+        raw_chunks: list[dict[str, Any]] = []
+        self._log_ai_request(request_id, messages, temperature, response_format)
+
         try:
             stream = await self.client.chat.completions.create(
                 model=self.model_name,
@@ -65,14 +186,40 @@ class OpenAIService:
                 ),
             )
         except Exception as exc:
+            self._log_ai_error(
+                request_id,
+                messages,
+                temperature,
+                response_format,
+                "",
+                raw_chunks,
+                exc,
+            )
             raise AppError(f"模型调用失败: {exc}", status_code=502) from exc
 
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            content = chunk.choices[0].delta.content
-            if content is not None:
-                yield content
+        try:
+            async for chunk in stream:
+                raw_chunks.append(self._dump_chunk(chunk))
+                if not chunk.choices:
+                    continue
+                content = chunk.choices[0].delta.content
+                if content is not None:
+                    parts.append(content)
+                    yield content
+        except Exception as exc:
+            self._log_ai_error(
+                request_id,
+                messages,
+                temperature,
+                response_format,
+                "".join(parts),
+                raw_chunks,
+                exc,
+            )
+            raise AppError(f"模型调用失败: {exc}", status_code=502) from exc
+
+        self._log_ai_response(request_id, "".join(parts))
+        self._log_ai_raw_response(request_id, raw_chunks, "".join(parts))
 
     async def collect_chat_completion(
         self,

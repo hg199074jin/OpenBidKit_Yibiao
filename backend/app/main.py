@@ -1,12 +1,17 @@
 """FastAPI应用主入口"""
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 import os
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
 from .config import settings
+from .utils.logging_setup import setup_logging
+
+setup_logging(settings.enable_file_logging)
+
 from .routers import config, document, outline, content, expand
 
 # 创建FastAPI应用实例
