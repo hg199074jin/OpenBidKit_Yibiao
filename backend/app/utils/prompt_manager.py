@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 def read_expand_outline_prompt() -> str:
     """从简版技术方案中提取目录的系统提示词。"""
-    return """你是一个专业的标书编写专家。需要从用户提交的标书技术方案中，提取出目录结构。
+    return """你是一个专业的标书编写专家。请严格基于用户提交的标书技术方案原文完成目录提取任务。
 
 要求：
 1. 目录结构要全面覆盖技术标的所有必要目录，包含多级目录
@@ -41,9 +41,10 @@ JSON 格式要求：
 """
 
 
-def generate_outline_prompt(overview: str, requirements: str) -> tuple[str, str]:
-    """生成标准目录的提示词。"""
-    system_prompt = """你是一个专业的标书编写专家。根据提供的项目概述和技术评分要求，生成投标文件中技术标部分的目录结构。
+def _build_outline_system_prompt() -> str:
+    """构建目录生成的共享系统提示词。"""
+    return """你是一个专业的标书编写专家。根据提供的项目概述和技术评分要求，生成投标文件中技术标部分的目录结构。
+如果用户提供了自己编写的目录，你要保证目录满足技术评分要求，并充分结合用户自己编写的目录。
 
 要求：
 1. 目录结构要全面覆盖技术标的所有必要章节
@@ -78,73 +79,37 @@ JSON 格式要求：
   ]
 }
 """
-    user_prompt = f"""请基于以下项目信息生成标书目录结构：
 
-项目概述：
-{overview}
 
-技术评分要求：
-{requirements}
-
-请生成完整的技术标目录结构，确保覆盖所有技术评分要点。"""
-    return system_prompt, user_prompt
+def generate_outline_prompt(overview: str, requirements: str) -> List[Dict[str, str]]:
+    """生成标准目录的提示词。"""
+    return [
+        {"role": "system", "content": _build_outline_system_prompt()},
+        {"role": "user", "content": f"项目概述：\n{overview}"},
+        {"role": "user", "content": f"技术评分要求：\n{requirements}"},
+        {
+            "role": "user",
+            "content": "请生成完整的技术标目录结构，确保覆盖所有技术评分要点。",
+        },
+    ]
 
 
 def generate_outline_with_old_prompt(
     overview: str,
     requirements: str,
     old_outline: str | None,
-) -> tuple[str, str]:
+) -> List[Dict[str, str]]:
     """生成基于旧目录扩写的提示词。"""
-    system_prompt = """你是一个专业的标书编写专家。根据提供的项目概述和技术评分要求，生成投标文件中技术标部分的目录结构。
-用户会提供一个自己编写的目录，你要保证目录满足技术评分要求，并充分结合用户自己编写的目录。
-
-要求：
-1. 目录结构要全面覆盖技术标的所有必要章节
-2. 章节名称要专业、准确，符合投标文件规范
-3. 一级目录名称要与技术评分要求中的章节名称一致；如果技术评分要求中没有明确章节名称，则结合内容总结一级目录名称
-4. 一共包括三级目录
-5. 返回标准 JSON 格式，包含章节编号、标题、描述和子章节
-6. 除了 JSON 结果外，不要输出任何其他内容
-
-JSON 格式要求：
-{
-  "outline": [
-    {
-      "id": "1",
-      "title": "",
-      "description": "",
-      "children": [
+    return [
+        {"role": "system", "content": _build_outline_system_prompt()},
+        {"role": "user", "content": f"项目概述：\n{overview}"},
+        {"role": "user", "content": f"技术评分要求：\n{requirements}"},
+        {"role": "user", "content": f"用户自己编写的目录：\n{old_outline or ''}"},
         {
-          "id": "1.1",
-          "title": "",
-          "description": "",
-          "children": [
-            {
-              "id": "1.1.1",
-              "title": "",
-              "description": ""
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-"""
-    user_prompt = f"""请基于以下项目信息生成标书目录结构：
-
-用户自己编写的目录：
-{old_outline or ""}
-
-项目概述：
-{overview}
-
-技术评分要求：
-{requirements}
-
-请生成完整的技术标目录结构，确保覆盖所有技术评分要点。"""
-    return system_prompt, user_prompt
+            "role": "user",
+            "content": "请在满足技术评分要求的前提下，充分结合用户自己编写的目录，生成完整的技术标目录结构。",
+        },
+    ]
 
 
 def build_analysis_messages(
@@ -227,29 +192,6 @@ def build_chapter_content_messages(
     chapter_title = chapter.get("title", "未命名章节")
     chapter_description = chapter.get("description", "")
 
-    context_parts: list[str] = []
-    if project_overview.strip():
-        context_parts.append(f"项目概述信息：\n{project_overview}")
-
-    if parent_chapters:
-        parent_lines = ["上级章节信息："]
-        for parent in parent_chapters:
-            parent_lines.append(
-                f"- {parent.get('id', 'unknown')} {parent.get('title', '未命名章节')}\n  {parent.get('description', '')}"
-            )
-        context_parts.append("\n".join(parent_lines))
-
-    if sibling_chapters:
-        sibling_lines = ["同级章节信息（请避免内容重复）："]
-        for sibling in sibling_chapters:
-            if sibling.get("id") == chapter_id:
-                continue
-            sibling_lines.append(
-                f"- {sibling.get('id', 'unknown')} {sibling.get('title', '未命名章节')}\n  {sibling.get('description', '')}"
-            )
-        if len(sibling_lines) > 1:
-            context_parts.append("\n".join(sibling_lines))
-
     system_prompt = """你是一个专业的标书编写专家，负责为投标文件的技术标部分生成具体内容。
 
 要求：
@@ -261,27 +203,59 @@ def build_chapter_content_messages(
 6. 直接返回章节内容，不生成标题，不要任何额外说明或格式标记。
 """
 
-    context_info = "\n\n".join(context_parts)
-    user_prompt = f"""请为以下标书章节生成具体内容：
+    messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
 
-{context_info}
+    if project_overview.strip():
+        messages.append(
+            {"role": "user", "content": f"项目概述信息：\n{project_overview}"}
+        )
+
+    if parent_chapters:
+        parent_lines = ["上级章节信息："]
+        for parent in parent_chapters:
+            parent_lines.append(
+                f"- {parent.get('id', 'unknown')} {parent.get('title', '未命名章节')}\n  {parent.get('description', '')}"
+            )
+        messages.append({"role": "user", "content": "\n".join(parent_lines)})
+
+    if sibling_chapters:
+        sibling_lines = ["同级章节信息（请避免内容重复）："]
+        for sibling in sibling_chapters:
+            if sibling.get("id") == chapter_id:
+                continue
+            sibling_lines.append(
+                f"- {sibling.get('id', 'unknown')} {sibling.get('title', '未命名章节')}\n  {sibling.get('description', '')}"
+            )
+        if len(sibling_lines) > 1:
+            messages.append({"role": "user", "content": "\n".join(sibling_lines)})
+
+    messages.append(
+        {
+            "role": "user",
+            "content": f"""请为以下标书章节生成具体内容：
 
 当前章节信息：
 章节ID: {chapter_id}
 章节标题: {chapter_title}
 章节描述: {chapter_description}
 
-请根据项目概述信息和上述章节层级关系，生成详细的专业内容，确保与上级章节的内容逻辑相承，同时避免与同级章节内容重复，突出本章节的独特性和技术方案优势。"""
+请根据项目概述信息和上述章节层级关系，生成详细的专业内容，确保与上级章节的内容逻辑相承，同时避免与同级章节内容重复，突出本章节的独特性和技术方案优势。""",
+        }
+    )
 
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
+    return messages
 
 
 def build_expand_outline_messages(file_content: str) -> List[Dict[str, str]]:
     """构建方案扩写目录提取消息。"""
     return [
         {"role": "system", "content": read_expand_outline_prompt()},
-        {"role": "user", "content": file_content},
+        {
+            "role": "user",
+            "content": f"以下是完整技术方案全文，请先完整阅读，并仅基于原文完成后续任务：\n\n{file_content}",
+        },
+        {
+            "role": "user",
+            "content": "请从上述技术方案中提取完整目录结构，确保覆盖技术标的所有必要目录，并按要求返回标准 JSON。",
+        },
     ]

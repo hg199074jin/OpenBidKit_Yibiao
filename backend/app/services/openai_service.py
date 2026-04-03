@@ -99,23 +99,16 @@ class OpenAIService:
     ) -> Dict[str, Any]:
         """生成目录结构。"""
         if uploaded_expand:
-            system_prompt, user_prompt = (
-                prompt_manager.generate_outline_with_old_prompt(
-                    overview,
-                    requirements,
-                    old_outline,
-                )
+            messages = prompt_manager.generate_outline_with_old_prompt(
+                overview,
+                requirements,
+                old_outline,
             )
         else:
-            system_prompt, user_prompt = prompt_manager.generate_outline_prompt(
-                overview, requirements
-            )
+            messages = prompt_manager.generate_outline_prompt(overview, requirements)
 
         return await self._collect_json_response(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             temperature=0.7,
         )
 
