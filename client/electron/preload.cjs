@@ -50,6 +50,11 @@ const bridge = {
   },
   export: {
     exportWord: (payload) => ipcRenderer.invoke('export:word', payload),
+    onWordExportProgress: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on('export:word-progress', listener);
+      return () => ipcRenderer.removeListener('export:word-progress', listener);
+    },
   },
 };
 

@@ -16,6 +16,7 @@ const initialState: TechnicalPlanState = {
   outlineGenerationTask: undefined,
   contentGenerationTask: undefined,
   contentGenerationSections: {},
+  contentGenerationPlans: {},
   outlineData: null,
 };
 

@@ -25,12 +25,16 @@ export interface ImageModelTestResult {
 }
 
 export type ImageModelProvider = 'volcengine' | 'google-ai-studio';
+export type ImageModelStatus = 'untested' | 'available' | 'unavailable';
 
 export interface ImageModelConfig {
   provider: ImageModelProvider;
   base_url?: string;
   api_key: string;
   model_name: string;
+  status?: ImageModelStatus;
+  tested_at?: string;
+  last_error?: string;
 }
 
 export type FileParserProvider = 'local' | 'mineru-accurate-api' | 'mineru-agent-api';

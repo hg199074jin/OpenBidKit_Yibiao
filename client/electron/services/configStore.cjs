@@ -11,6 +11,9 @@ const defaultConfig = {
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     api_key: '',
     model_name: '',
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
   },
   file_parser: {
     provider: 'local',

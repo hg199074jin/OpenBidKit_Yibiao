@@ -1,12 +1,13 @@
-import { useEffect } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { useEffect, useState } from 'react';
 import DocumentAnalysisPage from './DocumentAnalysisPage';
 import BidAnalysisPage from './BidAnalysisPage';
 import OutlineEditPage from './OutlineEditPage';
 import ContentEditPage from './ContentEditPage';
 import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { FloatingToolbar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, useToast } from '../../../shared/ui';
-import type { TechnicalPlanStep } from '../types';
-import type { OutlineData, OutlineItem } from '../../../shared/types';
+import type { BackgroundTaskState, TechnicalPlanStep } from '../types';
+import type { OutlineData, OutlineItem, WordExportProgressEvent } from '../../../shared/types';
 
 const steps: TechnicalPlanStep[] = [
   'document-analysis',
@@ -38,11 +39,51 @@ const resetState = {
   outlineGenerationTask: undefined,
   contentGenerationTask: undefined,
   contentGenerationSections: {},
+  contentGenerationPlans: {},
   outlineData: null,
 };
 
 function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
+}
+
+function countMermaidDiagrams(content: string) {
+  const mermaidBlocks = (String(content || '').match(/```mermaid[\s\S]*?```/gi) || []).length;
+  const mermaidInkImages = (String(content || '').match(/https:\/\/mermaid\.ink\/img\//gi) || []).length;
+  return mermaidBlocks + mermaidInkImages;
+}
+
+function countOutlineMermaidDiagrams(items: OutlineItem[]) {
+  return collectLeafItems(items).reduce((sum, item) => sum + countMermaidDiagrams(item.content || ''), 0);
+}
+
+interface ExportProgressState {
+  open: boolean;
+  running: boolean;
+  progress: number;
+  message: string;
+  warnings: string[];
+  mermaidCount: number;
+  error?: string;
+}
+
+const initialExportProgress: ExportProgressState = {
+  open: false,
+  running: false,
+  progress: 0,
+  message: '',
+  warnings: [],
+  mermaidCount: 0,
+};
+
+const MAX_UI_TASK_LOGS = 80;
+
+function trimTaskLogs(task?: BackgroundTaskState): BackgroundTaskState | undefined {
+  if (!task?.logs || task.logs.length <= MAX_UI_TASK_LOGS) {
+    return task;
+  }
+
+  return { ...task, logs: task.logs.slice(-MAX_UI_TASK_LOGS) };
 }
 
 function clearOutlineContent(items: OutlineItem[]): OutlineItem[] {
@@ -74,9 +115,11 @@ function resetGeneratedContent(outlineData: OutlineData): OutlineData {
 function TechnicalPlanHome() {
   const { state, setState } = useTechnicalPlanWorkflow();
   const { showToast } = useToast();
+  const [exportProgress, setExportProgress] = useState<ExportProgressState>(initialExportProgress);
   const activeIndex = steps.indexOf(state.step);
   const bidAnalysisReady = Boolean(state.projectOverview && state.techRequirements && state.bidAnalysisProgress === 100);
   const isContentGenerating = state.contentGenerationTask?.status === 'running';
+  const isExporting = exportProgress.running;
   const isNextDisabled = activeIndex >= steps.length - 1
     || (state.step === 'document-analysis' && !state.fileContent)
     || (state.step === 'bid-analysis' && !bidAnalysisReady)
@@ -109,6 +152,7 @@ function TechnicalPlanHome() {
 
     const unsubscribe = window.yibiao.tasks.onTaskEvent<typeof state>((event) => {
       const taskType = (event.task as { type?: string } | undefined)?.type;
+      const latestTask = trimTaskLogs(event.task as BackgroundTaskState | undefined);
       const technicalPlan = event.technicalPlan;
 
       if (!technicalPlan) {
@@ -119,7 +163,7 @@ function TechnicalPlanHome() {
         if (taskType === 'bid-analysis') {
           return {
             ...prev,
-            bidAnalysisTask: technicalPlan.bidAnalysisTask,
+            bidAnalysisTask: trimTaskLogs(technicalPlan.bidAnalysisTask) || latestTask,
             bidAnalysisTasks: technicalPlan.bidAnalysisTasks || prev.bidAnalysisTasks,
             bidAnalysisProgress: technicalPlan.bidAnalysisProgress ?? prev.bidAnalysisProgress,
             projectOverview: technicalPlan.projectOverview ?? prev.projectOverview,
@@ -134,18 +178,20 @@ function TechnicalPlanHome() {
 
           return {
             ...prev,
-            outlineGenerationTask: technicalPlan.outlineGenerationTask,
+            outlineGenerationTask: trimTaskLogs(technicalPlan.outlineGenerationTask) || latestTask,
             outlineData: nextOutlineData,
             contentGenerationTask: nextOutlineData !== prev.outlineData ? undefined : prev.contentGenerationTask,
             contentGenerationSections: nextOutlineData !== prev.outlineData ? {} : prev.contentGenerationSections,
+            contentGenerationPlans: nextOutlineData !== prev.outlineData ? {} : prev.contentGenerationPlans,
           };
         }
 
         if (taskType === 'content-generation') {
           return {
             ...prev,
-            contentGenerationTask: technicalPlan.contentGenerationTask,
+            contentGenerationTask: latestTask || trimTaskLogs(technicalPlan.contentGenerationTask),
             contentGenerationSections: technicalPlan.contentGenerationSections || prev.contentGenerationSections,
+            contentGenerationPlans: technicalPlan.contentGenerationPlans || prev.contentGenerationPlans,
             outlineData: technicalPlan.outlineData || prev.outlineData,
           };
         }
@@ -166,18 +212,70 @@ function TechnicalPlanHome() {
       return;
     }
 
+    const requestId = `export-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const mermaidCount = countOutlineMermaidDiagrams(state.outlineData.outline);
+    let unsubscribe: (() => void) | undefined;
+
     try {
+      setExportProgress({
+        open: true,
+        running: true,
+        progress: 2,
+        message: mermaidCount
+          ? `检测到 ${mermaidCount} 张 Mermaid 图，导出时会转换为 Word 图片，可能需要稍等。`
+          : '正在准备导出 Word。',
+        warnings: [],
+        mermaidCount,
+      });
+
+      unsubscribe = window.yibiao?.export.onWordExportProgress((event: WordExportProgressEvent) => {
+        if (event.requestId && event.requestId !== requestId) {
+          return;
+        }
+
+        setExportProgress((prev) => ({
+          ...prev,
+          open: true,
+          running: event.phase === 'running',
+          progress: event.progress,
+          message: event.message,
+          warnings: event.warnings || prev.warnings,
+          error: event.phase === 'error' ? event.message : undefined,
+        }));
+      });
+
       const result = await window.yibiao?.export.exportWord({
+        requestId,
         project_name: state.outlineData.project_name,
         outline: state.outlineData.outline,
       });
       if (result?.canceled) {
+        setExportProgress(initialExportProgress);
         showToast('已取消导出', 'info');
         return;
       }
-      showToast(result?.message || 'Word 已导出', 'success');
+      setExportProgress((prev) => ({
+        ...prev,
+        open: true,
+        running: false,
+        progress: 100,
+        message: result?.message || 'Word 已导出，请打开文档核对图片、表格和版式。',
+        warnings: result?.warnings || prev.warnings,
+      }));
+      showToast(result?.message || 'Word 已导出', result?.warnings?.length ? 'info' : 'success');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '导出 Word 失败', 'error');
+      const message = error instanceof Error ? error.message : '导出 Word 失败';
+      setExportProgress((prev) => ({
+        ...prev,
+        open: true,
+        running: false,
+        progress: 100,
+        message,
+        error: message,
+      }));
+      showToast(message, 'error');
+    } finally {
+      unsubscribe?.();
     }
   };
 
@@ -212,6 +310,28 @@ function TechnicalPlanHome() {
     });
   };
 
+  const resetContentGeneration = async () => {
+    if (!state.outlineData?.outline?.length) {
+      throw new Error('当前没有可重新生成的目录');
+    }
+
+    const updatedOutlineData = resetGeneratedContent(state.outlineData);
+    setState((prev) => ({
+      ...prev,
+      outlineData: updatedOutlineData,
+      contentGenerationTask: undefined,
+      contentGenerationSections: {},
+      contentGenerationPlans: {},
+    }));
+    await window.yibiao?.workspace.updateTechnicalPlan({
+      outlineData: updatedOutlineData,
+      contentGenerationTask: undefined,
+      contentGenerationSections: {},
+      contentGenerationPlans: {},
+    });
+    return updatedOutlineData;
+  };
+
   const generatedContentCount = state.outlineData?.outline
     ? collectLeafItems(state.outlineData.outline).filter((item) => item.content?.trim()).length
     : 0;
@@ -228,11 +348,11 @@ function TechnicalPlanHome() {
       },
       {
         id: 'export-word',
-        label: '导出 Word',
+        label: isExporting ? '导出中...' : '导出 Word',
         icon: <ToolbarDocumentIcon />,
         variant: 'primary' as const,
-        disabled: isContentGenerating || !state.outlineData,
-        tooltip: isContentGenerating ? '正文生成中，完成后再导出' : generatedContentCount ? '导出当前技术方案正文' : '可导出空目录文档，建议先生成正文',
+        disabled: isContentGenerating || isExporting || !state.outlineData,
+        tooltip: isContentGenerating ? '正文生成中，完成后再导出' : isExporting ? 'Word 正在导出，请稍候' : generatedContentCount ? '导出当前技术方案正文' : '可导出空目录文档，建议先生成正文',
         onClick: exportWord,
       },
       {
@@ -309,6 +429,7 @@ function TechnicalPlanHome() {
             outlineGenerationTask: undefined,
             contentGenerationTask: undefined,
             contentGenerationSections: {},
+            contentGenerationPlans: {},
             outlineData: null,
           }))}
         />
@@ -344,6 +465,7 @@ function TechnicalPlanHome() {
             outlineData: resetGeneratedContent(outlineData),
             contentGenerationTask: undefined,
             contentGenerationSections: {},
+            contentGenerationPlans: {},
           }))}
         />
       )}
@@ -354,6 +476,7 @@ function TechnicalPlanHome() {
           task={state.contentGenerationTask}
           sections={state.contentGenerationSections}
           onContentSaved={saveChapterContent}
+          onContentReset={resetContentGeneration}
         />
       )}
       {state.step === 'expand' && (
@@ -367,6 +490,48 @@ function TechnicalPlanHome() {
           <p>后续接入旧方案导入、章节扩写和人工校准。</p>
         </section>
       )}
+
+      <Dialog.Root
+        open={exportProgress.open}
+        onOpenChange={(open) => {
+          if (!open && !exportProgress.running) {
+            setExportProgress(initialExportProgress);
+          }
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="export-progress-card">
+            <div className="content-regenerate-card-head">
+              <span className="section-kicker">Word 导出</span>
+              <Dialog.Title>{exportProgress.running ? '正在导出 Word' : exportProgress.error ? '导出失败' : '导出完成'}</Dialog.Title>
+              <Dialog.Description>
+                {exportProgress.mermaidCount > 0
+                  ? `本次包含 ${exportProgress.mermaidCount} 张 Mermaid 图，导出时会通过 mermaid.ink 转换成 Word 图片，速度受网络影响。`
+                  : '正在将正文、表格和图片写入 Word 文档。'}
+              </Dialog.Description>
+            </div>
+            <div className="export-progress-body">
+              <div className="content-generation-progress-track" aria-label={`Word 导出进度 ${exportProgress.progress}%`}>
+                <span style={{ width: `${exportProgress.progress}%` }} />
+              </div>
+              <p>{exportProgress.message || '正在处理导出任务，请稍候。'}</p>
+              {exportProgress.warnings.length > 0 && (
+                <div className="export-warning-list">
+                  <strong>需要核对</strong>
+                  {exportProgress.warnings.slice(0, 4).map((warning) => <small key={warning}>{warning}</small>)}
+                  {exportProgress.warnings.length > 4 && <small>还有 {exportProgress.warnings.length - 4} 条图片提示，请打开导出的 Word 核对。</small>}
+                </div>
+              )}
+            </div>
+            {!exportProgress.running && (
+              <div className="content-regenerate-actions">
+                <Dialog.Close className="primary-action" type="button">知道了</Dialog.Close>
+              </div>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <FloatingToolbar groups={toolbarGroups} label="技术方案工具条" />
     </div>

@@ -33,3 +33,19 @@
 - v2.0.1 使用最新 workflow 手动发布后已上传 13 个 Release assets；旧 tag 的 artifactName 生成了空前缀文件名，后续版本已改为稳定 ASCII 前缀 `Yibiao-${version}-${os}-${arch}.${ext}`。
 - 下载的 `-2.0.1-win-x64.exe` SHA256 与 GitHub Release digest 一致，7-Zip 可识别为 NSIS/Electron 安装包；本地启动后进程保持运行且有响应窗口标题，说明安装器没有崩溃。用户看不到窗口更可能是安全扫描延迟、窗口在后方/任务栏，或旧产物以 `-` 开头导致识别体验差。
 - 打包后图标仍为 Electron 默认图标的根因：Windows 配置中此前为绕过本机 `winCodeSign` 解压权限问题关闭了 `win.signAndEditExecutable`，导致 electron-builder 不会把 `assets/icon.ico` 写入 exe 资源；macOS 则缺少 `assets/icon.icns`。已恢复 Windows exe 资源编辑，并在 macOS workflow 中用 `sips` + `iconutil` 从 `assets/icon_256.png` 生成 `assets/icon.icns` 后打包。
+- Step04 当前正文生成只在 `contentGenerationTask.cjs` 里流式生成纯正文；`ContentEditPage` 已用 `ReactMarkdown + remark-gfm` 展示 Markdown，因此表格可直接由正文 Markdown 承载。
+- 生图配置目前只有测试接口，没有持久化可用状态，也没有正式生图方法；需要在 `image_model` 下增加状态字段，并由设置页测试结果写回配置。
+- Word 导出已支持 Markdown 图片节点，但预览和导出还需要统一支持本机工作区图片路径；使用 `yibiao-asset://generated-images/...` 可避免把大 base64 长期写入 `technical_plan.json`。
+- mermaid.ink 的 `pako:` 编码不是直接压缩 Mermaid 源码；它会先反序列化 `{ code, mermaid }` JSON 状态，再用 pako inflate 解压。客户端应使用 `zlib.deflateSync(JSON.stringify({ code, mermaid: { theme: 'default' } }))` 后转 base64url，不能用 `deflateRawSync` 直接压缩源码。
+- 第三批优化后，新正文中的 Mermaid 图保存为 Markdown `mermaid` 代码块；Renderer 通过动态导入 `mermaid` 本地渲染预览，Word 导出时 Main 再通过 mermaid.ink 转 PNG 并上报进度。
+- `docx` 包默认只声明 `png/jpeg/jpg/bmp/gif` 图片 content type，不包含 WebP；生成图如果保存为 `.webp`，导出前应在 Electron Main 运行时用 `nativeImage` 转 PNG。
+- 正文页启用 `rehypeRaw` 后，Word 导出需要处理常见 HTML 节点，否则会出现预览可见但导出丢失或降级的问题；当前已覆盖 `br/img/table/list/blockquote/strong/em/code` 等常见标签。
+- Mermaid 预览失败不一定能只靠 mermaid.ink 发现：截图中的分号、`&` 多节点连接简写、未加引号的中文节点标签在 mermaid.ink 可返回 PNG，但前端 `mermaid.render()` 仍可能报 lexical error。因此生成侧校验除了 mermaid.ink 渲染结果，还需要加前端兼容性规则，要求中文标签写成 `A["中文"]`、不用分号、不用 `&` 简写。
+- Step04 配图应从正文生成阶段拆出：编排阶段可同时提名 AI 生图和 Mermaid 候选，正文生成阶段只写纯正文，配图阶段再按 AI 上限先选 AI 目标，未入选 AI 但有 Mermaid 候选的章节降级为 Mermaid。这样既保留 AI 上限控制，也不会让 AI 候选挤掉 Mermaid 图数量。
+- Word 导出表格漏识别的关键风险在 `remark-gfm` 解析前的原始 Markdown 形态：模型可能把标题和表格写在同一行，或把多行表格压缩成一行；导出层先拆分并补空行后，压缩表格 smoke test 可生成真实 `<w:tbl>`。
+- Word 导出有序列表编号连续的根因是所有 ordered list 共用同一个 numbering reference；改为每个 Markdown/HTML 有序列表块创建独立 reference 后，两段独立列表在 document XML 中使用不同 `numId`。
+- 截图中未转换成功的表格属于更具体的压缩形态：表头单独一行，但下一行同时包含 GFM 分隔列和数据列，例如 `| :--- | ... | :--- | 每日运行简报 | ... |`。按表头列数拆出分隔行和后续数据行后，`remark-gfm` 能正常生成 table AST。
+- 单章重新生成此前无法复用编排结果，因为 `contentPlans` 只存在于 `contentGenerationTask.cjs` 的运行时 `Map` 中，任务结束后不会写入 `technical_plan.json`。需要将最终配图决策持久化为 `contentGenerationPlans`，单章才可跳过重新编排。
+- 单章重新生成复用历史编排时仍能完整走“正文生成 -> 配图”流程；缺失历史编排时只编排目标小节一次，不触发全文 `planAll()`。
+- Word 导出 HTML 容器评审有效：`htmlNodeToDocxBlocks()` 原先把 `div/section/article` 统一走 `htmlInlineRuns()`，会让容器内的 `table/ul/ol/blockquote/img` 等块级内容丢失 Word 原生结构。修复后仅当容器存在块级子节点时递归到 `htmlNodesToDocxBlocks()`，纯内联容器仍保持单段落输出。
+- 列表项内 Markdown 表格导出失败的根因是导出前表格归一化丢掉了分隔行缩进：`    | :--- | ... |` 被拆成 `| :--- | ... |`，导致表头/分隔行/数据行缩进不一致，`remark-gfm` 不能把它识别成嵌套表格。保留空白前缀缩进后，列表内表格可以导出为 Word 原生表格。

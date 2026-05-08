@@ -1,11 +1,48 @@
-const { app, BrowserWindow, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, nativeTheme, shell, protocol, net } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { registerIpcHandlers } = require('./ipc/index.cjs');
 const { setupAutoUpdate } = require('./services/updateService.cjs');
+const { getGeneratedImagesDir } = require('./utils/paths.cjs');
 
 const rendererUrl = process.env.ELECTRON_RENDERER_URL;
 const iconPath = path.join(__dirname, '../assets/icon.ico');
+
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'yibiao-asset',
+  privileges: { standard: true, secure: true, supportFetchAPI: true },
+}]);
+
+function registerAssetProtocol() {
+  protocol.handle('yibiao-asset', (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== 'generated-images') {
+        return new Response('Not found', { status: 404 });
+      }
+
+      const relativePath = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+      if (!relativePath) {
+        return new Response('Not found', { status: 404 });
+      }
+
+      const baseDir = path.resolve(getGeneratedImagesDir(app));
+      const filePath = path.resolve(baseDir, relativePath);
+      if (filePath !== baseDir && !filePath.startsWith(`${baseDir}${path.sep}`)) {
+        return new Response('Forbidden', { status: 403 });
+      }
+
+      if (!fs.existsSync(filePath)) {
+        return new Response('Not found', { status: 404 });
+      }
+
+      return net.fetch(pathToFileURL(filePath).toString());
+    } catch {
+      return new Response('Invalid asset url', { status: 400 });
+    }
+  });
+}
 
 function createMainWindow() {
   const mainWindow = new BrowserWindow({
@@ -43,6 +80,7 @@ function createMainWindow() {
 
 app.whenReady().then(() => {
   nativeTheme.themeSource = 'light';
+  registerAssetProtocol();
   registerIpcHandlers(app);
   const mainWindow = createMainWindow();
   setupAutoUpdate({ app, mainWindow });

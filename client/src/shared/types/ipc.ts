@@ -7,6 +7,22 @@ export interface TaskEvent<TState = unknown> {
   technicalPlan: TState;
 }
 
+export interface WordExportProgressEvent {
+  requestId?: string;
+  phase: 'running' | 'success' | 'error' | 'canceled';
+  progress: number;
+  message: string;
+  warnings?: string[];
+}
+
+export interface WordExportResult {
+  success: boolean;
+  canceled?: boolean;
+  path?: string;
+  message?: string;
+  warnings?: string[];
+}
+
 export interface YibiaoBridge {
   appName: string;
   platform: string;
@@ -39,6 +55,7 @@ export interface YibiaoBridge {
     onTaskEvent: <TState = unknown>(callback: (event: TaskEvent<TState>) => void) => () => void;
   };
   export: {
-    exportWord: (payload: unknown) => Promise<{ success: boolean; canceled?: boolean; path?: string; message?: string }>;
+    exportWord: (payload: unknown) => Promise<WordExportResult>;
+    onWordExportProgress: (callback: (event: WordExportProgressEvent) => void) => () => void;
   };
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { FloatingToolbar, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
-import type { ClientConfig, FileParserProvider, ImageModelProvider } from '../../../shared/types';
+import type { ClientConfig, FileParserProvider, ImageModelConfig, ImageModelProvider, ImageModelStatus } from '../../../shared/types';
 import type { SettingsPageState } from '../types';
 
 type SettingsTab = 'general' | 'text-model' | 'image-model' | 'file-parser' | 'about';
@@ -29,6 +29,43 @@ const imageProviderDefaults: Record<ImageModelProvider, { base_url: string; mode
     model_name: 'gemini-3.1-flash-image-preview',
   },
 };
+
+const imageStatusMeta: Record<ImageModelStatus, { label: string; description: string }> = {
+  untested: {
+    label: '未测试',
+    description: '请点击测试确认当前生图模型可用，正文生成时只有可用状态才会自动配图。',
+  },
+  available: {
+    label: '可用',
+    description: '当前生图模型已通过测试，正文生成时会按内容需要自动配图。',
+  },
+  unavailable: {
+    label: '不可用',
+    description: '当前生图模型测试失败，正文生成会跳过配图。',
+  },
+};
+
+function resetImageModelStatus(imageModel: ImageModelConfig): ImageModelConfig {
+  return {
+    ...imageModel,
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
+  };
+}
+
+function formatImageTestTime(value?: string) {
+  if (!value) {
+    return '';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return date.toLocaleString('zh-CN', { hour12: false });
+}
 
 const fileParserProviders: Array<{ value: FileParserProvider; label: string }> = [
   { value: 'local', label: '本地解析' },
@@ -92,6 +129,9 @@ const initialState: SettingsPageState = {
     base_url: 'https://ark.cn-beijing.volces.com/api/v3',
     api_key: '',
     model_name: '',
+    status: 'untested',
+    tested_at: '',
+    last_error: '',
   },
   fileParser: {
     provider: 'local',
@@ -154,6 +194,13 @@ function SettingsPage() {
     developer_mode: state.general.developer_mode,
   });
 
+  const updateImageModelConfig = (partial: Partial<ImageModelConfig>) => {
+    setState((prev) => ({
+      ...prev,
+      imageModel: resetImageModelStatus({ ...prev.imageModel, ...partial }),
+    }));
+  };
+
   const saveClientConfig = async (config: ClientConfig) => {
     try {
       const result = await window.yibiao?.config.save(config);
@@ -202,11 +249,22 @@ function SettingsPage() {
     try {
       setTestingImageModel(true);
       const config = createClientConfig();
-      const saveResult = await window.yibiao?.config.save(config);
-      if (saveResult?.success) {
-        setSavedConfig(config);
-      }
       const result = await window.yibiao?.ai.testImageModel(config);
+      if (!result?.success) {
+        throw new Error(result?.message || '生图模型测试失败');
+      }
+      const testedConfig: ClientConfig = {
+        ...config,
+        image_model: {
+          ...config.image_model,
+          status: 'available',
+          tested_at: new Date().toISOString(),
+          last_error: '',
+        },
+      };
+      await window.yibiao?.config.save(testedConfig);
+      setState((prev) => ({ ...prev, imageModel: testedConfig.image_model }));
+      setSavedConfig(testedConfig);
       const previewSrc = result?.image_url || (result?.image_data ? `data:${result.mime_type || 'image/png'};base64,${result.image_data}` : '');
 
       if (previewSrc) {
@@ -215,7 +273,21 @@ function SettingsPage() {
 
       showToast(result?.message || '生图模型测试成功', result?.success ? 'success' : 'error');
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '生图模型测试失败', 'error');
+      const message = error instanceof Error ? error.message : '生图模型测试失败';
+      const config = createClientConfig();
+      const failedConfig: ClientConfig = {
+        ...config,
+        image_model: {
+          ...config.image_model,
+          status: 'unavailable',
+          tested_at: new Date().toISOString(),
+          last_error: message,
+        },
+      };
+      await window.yibiao?.config.save(failedConfig).catch(() => undefined);
+      setState((prev) => ({ ...prev, imageModel: failedConfig.image_model }));
+      setSavedConfig(failedConfig);
+      showToast(message, 'error');
     } finally {
       setTestingImageModel(false);
     }
@@ -265,7 +337,7 @@ function SettingsPage() {
         setImageModels(models);
         setState((prev) => ({
           ...prev,
-          imageModel: { ...prev.imageModel, model_name: prev.imageModel.model_name || models[0] },
+          imageModel: prev.imageModel.model_name ? prev.imageModel : resetImageModelStatus({ ...prev.imageModel, model_name: models[0] }),
         }));
         showToast('已载入 Google AI Studio 生图模型', 'success');
         return;
@@ -326,6 +398,9 @@ function SettingsPage() {
 
   const canSaveActiveTab = activeTab === 'general' || activeTab === 'text-model' || activeTab === 'image-model' || activeTab === 'file-parser';
   const activeTabDirty = isActiveTabDirty();
+  const imageModelStatus: ImageModelStatus = state.imageModel.status || 'untested';
+  const currentImageStatus = imageStatusMeta[imageModelStatus];
+  const imageTestTime = formatImageTestTime(state.imageModel.tested_at);
   const settingsToolbarGroups: FloatingToolbarGroup[] = canSaveActiveTab
     ? [
         {
@@ -533,6 +608,15 @@ function SettingsPage() {
             <span />
             <strong>生图模型配置</strong>
           </div>
+          <div className={`image-model-status is-${imageModelStatus}`}>
+            <div>
+              <strong>接口状态：{currentImageStatus.label}</strong>
+              <span>{currentImageStatus.description}</span>
+              {imageTestTime && <small>最近测试：{imageTestTime}</small>}
+              {imageModelStatus === 'unavailable' && state.imageModel.last_error && <small>失败原因：{state.imageModel.last_error}</small>}
+            </div>
+            <em>{currentImageStatus.label}</em>
+          </div>
           <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
@@ -541,15 +625,14 @@ function SettingsPage() {
               </div>
               <select
                 value={state.imageModel.provider}
-                onChange={(event) => setState((prev) => ({
-                  ...prev,
-                  imageModel: {
-                    ...prev.imageModel,
-                    provider: event.target.value as ImageModelProvider,
-                    base_url: imageProviderDefaults[event.target.value as ImageModelProvider].base_url,
-                    model_name: imageProviderDefaults[event.target.value as ImageModelProvider].model_name,
-                  },
-                }))}
+                onChange={(event) => {
+                  const provider = event.target.value as ImageModelProvider;
+                  updateImageModelConfig({
+                    provider,
+                    base_url: imageProviderDefaults[provider].base_url,
+                    model_name: imageProviderDefaults[provider].model_name,
+                  });
+                }}
               >
                 {imageProviders.map((provider) => (
                   <option value={provider.value} key={provider.value}>{provider.label}</option>
@@ -565,10 +648,7 @@ function SettingsPage() {
                 type="text"
                 value={state.imageModel.base_url || ''}
                 placeholder={imageProviderDefaults[state.imageModel.provider].base_url}
-                onChange={(event) => setState((prev) => ({
-                  ...prev,
-                  imageModel: { ...prev.imageModel, base_url: event.target.value },
-                }))}
+                onChange={(event) => updateImageModelConfig({ base_url: event.target.value })}
               />
             </label>
             <label className="settings-row">
@@ -580,10 +660,7 @@ function SettingsPage() {
                 type="password"
                 value={state.imageModel.api_key}
               placeholder="请输入生图服务 API Key"
-              onChange={(event) => setState((prev) => ({
-                ...prev,
-                  imageModel: { ...prev.imageModel, api_key: event.target.value },
-                }))}
+              onChange={(event) => updateImageModelConfig({ api_key: event.target.value })}
               />
             </label>
             <label className="settings-row">
@@ -595,10 +672,7 @@ function SettingsPage() {
                 {imageModels.length > 0 ? (
                   <select
                     value={state.imageModel.model_name}
-                    onChange={(event) => setState((prev) => ({
-                      ...prev,
-                      imageModel: { ...prev.imageModel, model_name: event.target.value },
-                    }))}
+                    onChange={(event) => updateImageModelConfig({ model_name: event.target.value })}
                   >
                     {imageModels.map((model) => <option value={model} key={model}>{model}</option>)}
                   </select>
@@ -607,10 +681,7 @@ function SettingsPage() {
                     type="text"
                     value={state.imageModel.model_name}
                     placeholder={state.imageModel.provider === 'volcengine' ? '请输入已开通的模型或推理接入点 ID' : 'gemini-3.1-flash-image-preview'}
-                    onChange={(event) => setState((prev) => ({
-                      ...prev,
-                      imageModel: { ...prev.imageModel, model_name: event.target.value },
-                    }))}
+                    onChange={(event) => updateImageModelConfig({ model_name: event.target.value })}
                   />
                 )}
                 <button

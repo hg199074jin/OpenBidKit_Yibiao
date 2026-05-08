@@ -16,6 +16,10 @@ function getTechnicalPlanFilePath(app) {
   return path.join(getWorkspaceDir(app), 'technical_plan.json');
 }
 
+function getGeneratedImagesDir(app) {
+  return path.join(getWorkspaceDir(app), 'generated-images');
+}
+
 function getAiLogsDir(app) {
   return path.join(getUserDataPath(app), 'logs', 'ai');
 }
@@ -23,6 +27,7 @@ function getAiLogsDir(app) {
 module.exports = {
   getAiLogsDir,
   getConfigFilePath,
+  getGeneratedImagesDir,
   getTechnicalPlanFilePath,
   getWorkspaceDir,
   getUserDataPath,

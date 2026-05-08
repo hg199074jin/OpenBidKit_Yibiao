@@ -1,11 +1,13 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import * as Popover from '@radix-ui/react-popover';
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import ReactMarkdown from 'react-markdown';
+import * as Switch from '@radix-ui/react-switch';
+import { Children, isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
+import rehypeRaw from 'rehype-raw';
 import remarkGfm from 'remark-gfm';
 import { useToast } from '../../../shared/ui';
-import type { OutlineData, OutlineItem } from '../../../shared/types';
-import type { BackgroundTaskState, ContentGenerationSectionStatus, ContentGenerationSections } from '../types';
+import type { ImageModelStatus, OutlineData, OutlineItem } from '../../../shared/types';
+import type { BackgroundTaskState, ContentGenerationSectionStatus, ContentGenerationSections, ContentImageStats } from '../types';
 
 interface ContentEditPageProps {
   outlineData: OutlineData | null;
@@ -13,9 +15,16 @@ interface ContentEditPageProps {
   task?: BackgroundTaskState;
   sections: ContentGenerationSections;
   onContentSaved: (item: OutlineItem, content: string) => Promise<void> | void;
+  onContentReset: () => Promise<OutlineData> | OutlineData;
 }
 
-type TreeStatus = ContentGenerationSectionStatus | 'partial';
+type TreeStatus = ContentGenerationSectionStatus | 'partial' | 'planning';
+
+interface OutlineNodeMeta {
+  status: TreeStatus;
+  leafCount: number;
+  words: number;
+}
 
 const statusLabels: Record<TreeStatus, string> = {
   idle: '待生成',
@@ -23,7 +32,24 @@ const statusLabels: Record<TreeStatus, string> = {
   success: '已生成',
   error: '失败',
   partial: '部分生成',
+  planning: '编排中',
 };
+
+const imageModelStatusLabels: Record<ImageModelStatus, string> = {
+  untested: '未测试',
+  available: '可用',
+  unavailable: '不可用',
+};
+
+const emptyImageStats: ContentImageStats = { planned: 0, attempted: 0, success: 0, failed: 0, skipped: 0 };
+
+function normalizeImageStats(stats?: Partial<ContentImageStats>): ContentImageStats {
+  return { ...emptyImageStats, ...(stats || {}) };
+}
+
+function markdownUrlTransform(value: string) {
+  return value.startsWith('yibiao-asset://') ? value : defaultUrlTransform(value);
+}
 
 function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
@@ -85,7 +111,155 @@ function getTreeStatus(item: OutlineItem, sections: ContentGenerationSections): 
   return 'idle';
 }
 
-function ContentEditPage({ outlineData, projectOverview, task, sections, onContentSaved }: ContentEditPageProps) {
+function getParentStatus(childStatuses: TreeStatus[]): TreeStatus {
+  if (childStatuses.some((status) => status === 'running')) return 'running';
+  if (childStatuses.every((status) => status === 'success')) return 'success';
+  if (childStatuses.some((status) => status === 'error')) return 'error';
+  if (childStatuses.some((status) => status === 'success' || status === 'partial')) return 'partial';
+  if (childStatuses.some((status) => status === 'planning')) return 'planning';
+  return 'idle';
+}
+
+function buildOutlineMeta(items: OutlineItem[], sections: ContentGenerationSections, planning: boolean) {
+  const meta = new Map<string, OutlineNodeMeta>();
+
+  function visit(item: OutlineItem): OutlineNodeMeta {
+    if (!item.children?.length) {
+      const baseStatus = getLeafStatus(item, sections);
+      const status: TreeStatus = planning && baseStatus === 'idle' ? 'planning' : baseStatus;
+      const nodeMeta: OutlineNodeMeta = { status, leafCount: 1, words: countWords(getLeafContent(item, sections)) };
+      meta.set(item.id, nodeMeta);
+      return nodeMeta;
+    }
+
+    const children = item.children.map(visit);
+    const nodeMeta = {
+      status: getParentStatus(children.map((child) => child.status)),
+      leafCount: children.reduce((sum, child) => sum + child.leafCount, 0),
+      words: children.reduce((sum, child) => sum + child.words, 0),
+    };
+    meta.set(item.id, nodeMeta);
+    return nodeMeta;
+  }
+
+  items.forEach(visit);
+  return meta;
+}
+
+function MermaidBlock({ code }: { code: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
+  const [errorMessage, setErrorMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const container = containerRef.current;
+    const trimmedCode = String(code || '').trim();
+
+    if (!trimmedCode) {
+      setStatus('error');
+      setErrorMessage('Mermaid 图代码为空');
+      if (container) {
+        container.innerHTML = '';
+      }
+      return undefined;
+    }
+
+    setStatus('loading');
+    setErrorMessage('');
+    if (container) {
+      container.innerHTML = '';
+    }
+
+    import('mermaid')
+      .then((module) => {
+        const mermaid = module.default;
+        mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict' });
+        return mermaid.render(`mermaid-${Date.now()}-${Math.random().toString(36).slice(2)}`, trimmedCode);
+      })
+      .then(({ svg }) => {
+        if (cancelled || !containerRef.current) {
+          return;
+        }
+        containerRef.current.innerHTML = svg;
+        setStatus('success');
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        setStatus('error');
+        setErrorMessage(error instanceof Error ? error.message : 'Mermaid 图渲染失败');
+      });
+
+    return () => {
+      cancelled = true;
+      if (container) {
+        container.innerHTML = '';
+      }
+    };
+  }, [code]);
+
+  return (
+    <figure className={`mermaid-preview-card is-${status}`}>
+      {status === 'loading' && <span>正在渲染 Mermaid 图...</span>}
+      {status === 'error' && (
+        <div className="mermaid-preview-error">
+          <strong>Mermaid 图渲染失败</strong>
+          <small>{errorMessage}</small>
+          <pre>{code}</pre>
+        </div>
+      )}
+      <div ref={containerRef} className="mermaid-preview-canvas" aria-hidden={status !== 'success'} />
+    </figure>
+  );
+}
+
+const MarkdownContent = memo(function MarkdownContent({ content, onPreviewImage }: { content: string; onPreviewImage: (src: string, alt: string) => void }) {
+  const markdownComponents = useMemo<Components>(() => ({
+    pre({ children, ...props }) {
+      const child = Children.count(children) === 1 ? Children.only(children) : null;
+      if (isValidElement(child)) {
+        const childProps = child.props as { className?: string; children?: ReactNode };
+        const className = childProps.className || '';
+        if (/\blanguage-mermaid\b/i.test(className)) {
+          return <MermaidBlock code={String(childProps.children || '').replace(/\n$/, '')} />;
+        }
+      }
+
+      return <pre {...props}>{children}</pre>;
+    },
+    img({ node: _node, src, alt, ...props }) {
+      const imageSrc = String(src || '');
+      const imageAlt = String(alt || '正文图片');
+      return (
+        <img
+          {...props}
+          src={imageSrc}
+          alt={imageAlt}
+          className="markdown-clickable-image"
+          role={imageSrc ? 'button' : undefined}
+          tabIndex={imageSrc ? 0 : undefined}
+          onClick={() => imageSrc && onPreviewImage(imageSrc, imageAlt)}
+          onKeyDown={(event) => {
+            if (imageSrc && (event.key === 'Enter' || event.key === ' ')) {
+              event.preventDefault();
+              onPreviewImage(imageSrc, imageAlt);
+            }
+          }}
+        />
+      );
+    },
+  }), [onPreviewImage]);
+
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} urlTransform={markdownUrlTransform} components={markdownComponents}>
+      {content}
+    </ReactMarkdown>
+  );
+});
+
+function ContentEditPage({ outlineData, projectOverview, task, sections, onContentSaved, onContentReset }: ContentEditPageProps) {
   const { showToast } = useToast();
   const leaves = useMemo(() => outlineData?.outline ? collectLeafItems(outlineData.outline) : [], [outlineData]);
   const [selectedItemId, setSelectedItemId] = useState('');
@@ -96,18 +270,54 @@ function ContentEditPage({ outlineData, projectOverview, task, sections, onConte
   const [requirementItem, setRequirementItem] = useState<OutlineItem | null>(null);
   const [regenerateRequirement, setRegenerateRequirement] = useState('');
   const [statsCollapsed, setStatsCollapsed] = useState(false);
+  const [developerMode, setDeveloperMode] = useState(false);
+  const [imageModelStatus, setImageModelStatus] = useState<ImageModelStatus>('untested');
+  const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
+  const [generationOptions, setGenerationOptions] = useState({ useAiImages: false, maxAiImages: 6, useMermaidImages: true });
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const firstLeafId = leaves[0]?.id || '';
   const selectedItem = outlineData?.outline && selectedItemId ? findItem(outlineData.outline, selectedItemId) : null;
   const selectedIsLeaf = Boolean(selectedItem && !selectedItem.children?.length);
   const selectedContent = selectedItem && selectedIsLeaf ? getLeafContent(selectedItem, sections) : '';
-  const selectedStatus = selectedItem ? getTreeStatus(selectedItem, sections) : 'idle';
   const running = task?.status === 'running';
-  const completedCount = leaves.filter((item) => getLeafStatus(item, sections) === 'success').length;
-  const failedCount = leaves.filter((item) => getLeafStatus(item, sections) === 'error').length;
-  const totalWords = leaves.reduce((sum, item) => sum + countWords(getLeafContent(item, sections)), 0);
+  const contentStats = task?.stats?.content;
+  const planning = running && contentStats?.phase === 'planning';
+  const illustrating = running && contentStats?.phase === 'illustrating';
+  const outlineMeta = useMemo(() => outlineData?.outline ? buildOutlineMeta(outlineData.outline, sections, planning) : new Map<string, OutlineNodeMeta>(), [outlineData, planning, sections]);
+  const contentSummary = useMemo(() => leaves.reduce((summary, item) => {
+    const status = getLeafStatus(item, sections);
+    return {
+      completedCount: summary.completedCount + (status === 'success' ? 1 : 0),
+      failedCount: summary.failedCount + (status === 'error' ? 1 : 0),
+      totalWords: summary.totalWords + (outlineMeta.get(item.id)?.words || 0),
+    };
+  }, { completedCount: 0, failedCount: 0, totalWords: 0 }), [leaves, outlineMeta, sections]);
+  const { completedCount, failedCount, totalWords } = contentSummary;
   const progress = leaves.length ? Math.round((completedCount / leaves.length) * 100) : 0;
+  const planningTotal = contentStats?.planning_total || leaves.length;
+  const planningCompleted = contentStats?.planning_completed || 0;
+  const planningProgress = planningTotal ? Math.round((planningCompleted / planningTotal) * 100) : 0;
+  const illustrationTotal = contentStats?.illustration_total || 0;
+  const illustrationCompleted = contentStats?.illustration_completed || 0;
+  const illustrationProgress = illustrationTotal ? Math.round((illustrationCompleted / illustrationTotal) * 100) : 0;
+  const displayProgress = planning ? planningProgress : illustrating ? illustrationProgress : progress;
+  const displayProgressLabel = planning ? '编排统计' : illustrating ? '配图统计' : '生成统计';
+  const displayProgressCount = planning
+    ? `${planningCompleted}/${planningTotal}`
+    : illustrating
+      ? `${illustrationCompleted}/${illustrationTotal}`
+      : `${completedCount}/${leaves.length}`;
+  const progressPhaseLabel = planning ? '正文编排' : illustrating ? '正文配图' : '正文生成';
+  const progressTrackClass = `content-generation-progress-track${planning ? ' is-planning' : ''}${illustrating ? ' is-illustrating' : ''}`;
+  const selectedStatus = selectedItem ? outlineMeta.get(selectedItem.id)?.status || 'idle' : 'idle';
   const editing = Boolean(selectedItem && selectedIsLeaf && editingItemId === selectedItem.id);
+  const imageStats = task?.stats?.images;
+  const aiImageStats = normalizeImageStats(imageStats?.ai);
+  const mermaidImageStats = normalizeImageStats(imageStats?.mermaid);
+  const imageModelAvailable = imageModelStatus === 'available';
+
+  const handlePreviewImage = useCallback((src: string, alt: string) => setPreviewImage({ src, alt }), []);
 
   useEffect(() => {
     if (!outlineData?.outline?.length) {
@@ -121,6 +331,15 @@ function ContentEditPage({ outlineData, projectOverview, task, sections, onConte
   }, [firstLeafId, outlineData, selectedItemId]);
 
   useEffect(() => {
+    window.yibiao?.config.load()
+      .then((config) => {
+        setDeveloperMode(Boolean(config.developer_mode));
+        setImageModelStatus(config.image_model?.status || 'untested');
+      })
+      .catch((error) => console.warn('读取开发者模式失败', error));
+  }, []);
+
+  useEffect(() => {
     if (!selectedItem || selectedItem.id === editingItemId) {
       return;
     }
@@ -128,6 +347,28 @@ function ContentEditPage({ outlineData, projectOverview, task, sections, onConte
     setIsPreviewing(false);
     setDraftContent('');
   }, [editingItemId, selectedItem]);
+
+  const openGenerationDialog = async () => {
+    if (!outlineData?.outline?.length) {
+      showToast('请先生成目录', 'info');
+      return;
+    }
+
+    try {
+      const config = await window.yibiao?.config.load();
+      const nextStatus = config?.image_model?.status || 'untested';
+      const available = nextStatus === 'available';
+      setImageModelStatus(nextStatus);
+      setGenerationOptions({
+        useAiImages: available,
+        maxAiImages: Math.min(6, Math.max(1, leaves.length)),
+        useMermaidImages: true,
+      });
+      setGenerationDialogOpen(true);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '读取生成配置失败', 'error');
+    }
+  };
 
   const startGeneration = async () => {
     if (!outlineData?.outline?.length) {
@@ -137,11 +378,23 @@ function ContentEditPage({ outlineData, projectOverview, task, sections, onConte
 
     try {
       const regenerate = leaves.length > 0 && completedCount === leaves.length;
+      const nextOutlineData = regenerate ? await onContentReset() : outlineData;
+      if (regenerate) {
+        setEditingItemId(null);
+        setIsPreviewing(false);
+        setDraftContent('');
+      }
       await window.yibiao?.tasks.startContentGeneration({
-        outlineData,
-        projectOverview: outlineData.project_overview || projectOverview,
+        outlineData: nextOutlineData,
+        projectOverview: nextOutlineData.project_overview || projectOverview,
         regenerate,
+        generationOptions: {
+          useAiImages: imageModelAvailable && generationOptions.useAiImages,
+          maxAiImages: generationOptions.maxAiImages,
+          useMermaidImages: generationOptions.useMermaidImages,
+        },
       });
+      setGenerationDialogOpen(false);
       showToast(regenerate ? '正文重新生成任务已在后台启动' : '正文生成任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动正文生成任务失败', 'error');
@@ -228,10 +481,11 @@ function ContentEditPage({ outlineData, projectOverview, task, sections, onConte
   };
 
   const renderTree = (items: OutlineItem[], level = 0): ReactNode => items.map((item) => {
-    const status = getTreeStatus(item, sections);
+    const meta = outlineMeta.get(item.id);
+    const status = meta?.status || 'idle';
     const isLeaf = !item.children?.length;
-    const leafCount = isLeaf ? 1 : collectLeafItems(item.children || []).length;
-    const words = isLeaf ? countWords(getLeafContent(item, sections)) : collectLeafItems(item.children || []).reduce((sum, leaf) => sum + countWords(getLeafContent(leaf, sections)), 0);
+    const leafCount = meta?.leafCount || 0;
+    const words = meta?.words || 0;
 
     return (
       <div className="content-outline-node" key={item.id} style={{ '--content-level': level } as CSSProperties}>
@@ -312,10 +566,18 @@ function ContentEditPage({ outlineData, projectOverview, task, sections, onConte
           <span><strong>{completedCount}</strong> 已生成</span>
           <span><strong>{totalWords}</strong> 字</span>
         </div>
-        <button type="button" className="primary-action" onClick={startGeneration} disabled={running || !leaves.length}>
+        <button type="button" className="primary-action" onClick={openGenerationDialog} disabled={running || !leaves.length}>
           {running ? '正文生成中...' : completedCount === leaves.length && leaves.length ? '重新生成正文' : completedCount > 0 ? '继续生成正文' : '生成正文'}
         </button>
       </section>
+
+      {developerMode && imageStats && (
+        <aside className="content-dev-stats-panel" aria-label="开发者生成统计">
+          <strong>配图统计</strong>
+          <span>AI 生图 计划 {aiImageStats.planned} / 尝试 {aiImageStats.attempted} / 成功 {aiImageStats.success} / 失败 {aiImageStats.failed} / 跳过 {aiImageStats.skipped}</span>
+          <span>Mermaid 计划 {mermaidImageStats.planned} / 尝试 {mermaidImageStats.attempted} / 成功 {mermaidImageStats.success} / 失败 {mermaidImageStats.failed}</span>
+        </aside>
+      )}
 
       <section className="content-generation-workspace">
         <aside className="content-outline-panel">
@@ -325,16 +587,16 @@ function ContentEditPage({ outlineData, projectOverview, task, sections, onConte
           </div>
           <div className={`content-outline-stats${statsCollapsed ? ' is-collapsed' : ''}`}>
             <button type="button" onClick={() => setStatsCollapsed((prev) => !prev)} aria-expanded={!statsCollapsed}>
-              <span>生成统计</span>
-              <strong>{completedCount}/{leaves.length}</strong>
+              <span>{displayProgressLabel}</span>
+              <strong>{displayProgressCount}</strong>
               <em>{statsCollapsed ? '展开' : '折叠'}</em>
             </button>
             {!statsCollapsed && (
               <div className="content-outline-stats-body">
-                <div className="content-generation-progress-track" aria-label={`正文生成进度 ${progress}%`}>
-                  <span style={{ width: `${progress}%` }} />
+                <div className={progressTrackClass} aria-label={`${progressPhaseLabel}进度 ${displayProgress}%`}>
+                  <span style={{ width: `${displayProgress}%` }} />
                 </div>
-                <p>{running ? task?.logs?.[task.logs.length - 1] || '正文生成任务正在运行。' : completedCount ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。` : '点击生成正文后，目录会实时显示每个小节状态。'}</p>
+                <p>{planning ? `正在编排正文结构，已完成 ${planningCompleted}/${planningTotal} 个小节。` : illustrating ? `正在生成配图，已完成 ${illustrationCompleted}/${illustrationTotal} 张。` : running ? task?.logs?.[task.logs.length - 1] || '正文生成任务正在运行。' : completedCount ? `已生成 ${completedCount} 个小节，共 ${totalWords} 字。` : '点击生成正文后，目录会实时显示每个小节状态。'}</p>
                 {failedCount > 0 && <small>失败 {failedCount} 个小节</small>}
               </div>
             )}
@@ -388,18 +650,14 @@ function ContentEditPage({ outlineData, projectOverview, task, sections, onConte
           ) : selectedItem && selectedIsLeaf && editing && isPreviewing ? (
             <div className="markdown-viewer content-generation-output">
               {draftContent.trim() ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {draftContent}
-                </ReactMarkdown>
+                <MarkdownContent content={draftContent} onPreviewImage={handlePreviewImage} />
               ) : (
                 <p className="content-editor-empty">暂无预览内容</p>
               )}
             </div>
           ) : selectedItem && selectedIsLeaf && selectedContent.trim() ? (
             <div className="markdown-viewer content-generation-output">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {selectedContent}
-              </ReactMarkdown>
+              <MarkdownContent content={selectedContent} onPreviewImage={handlePreviewImage} />
             </div>
           ) : selectedItem && selectedIsLeaf ? (
             <div className="markdown-empty-state content-generation-empty">
@@ -414,6 +672,84 @@ function ContentEditPage({ outlineData, projectOverview, task, sections, onConte
           )}
         </article>
       </section>
+
+      <Dialog.Root
+        open={generationDialogOpen}
+        onOpenChange={setGenerationDialogOpen}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="content-generation-config-card">
+            <div className="content-regenerate-card-head">
+              <span className="section-kicker">生成配置</span>
+              <Dialog.Title>正文生成配置</Dialog.Title>
+              <Dialog.Description>
+                {completedCount === leaves.length && leaves.length
+                  ? '重新生成会先清空全文正文、章节状态和任务进度，再从头生成。'
+                  : '开始生成前确认是否配图，以及本次最多生成多少张 AI 图片。'}
+              </Dialog.Description>
+            </div>
+            <div className="content-generation-config-list">
+              <label className="content-generation-config-row">
+                <span>
+                  <strong>使用 AI 生图</strong>
+                  <small>当前生图模型状态：{imageModelStatusLabels[imageModelStatus]}{!imageModelAvailable ? '，请到设置页面配置生图模型' : ''}</small>
+                </span>
+                <div className="content-generation-config-control">
+                  <em className={`content-image-status is-${imageModelStatus}`}>{imageModelStatusLabels[imageModelStatus]}</em>
+                  <Switch.Root
+                    className="content-generation-switch"
+                    checked={generationOptions.useAiImages && imageModelAvailable}
+                    disabled={!imageModelAvailable}
+                    onCheckedChange={(checked) => setGenerationOptions((prev) => ({ ...prev, useAiImages: checked }))}
+                    aria-label="是否使用 AI 生图"
+                  >
+                    <Switch.Thumb className="content-generation-switch-thumb" />
+                  </Switch.Root>
+                </div>
+              </label>
+              <label className="content-generation-config-row">
+                <span>
+                  <strong>全文图片最大数量</strong>
+                  <small>AI 生图会在整体决策后择优分布，不再按先后顺序抢占名额。</small>
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  max={Math.max(1, leaves.length)}
+                  value={generationOptions.maxAiImages}
+                  disabled={!generationOptions.useAiImages || !imageModelAvailable}
+                  onChange={(event) => setGenerationOptions((prev) => ({
+                    ...prev,
+                    maxAiImages: Math.max(0, Math.min(Number(event.target.value) || 0, Math.max(1, leaves.length))),
+                  }))}
+                />
+              </label>
+              <label className="content-generation-config-row">
+                <span>
+                  <strong>生成 Mermaid 图片</strong>
+                  <small>适合简单流程、层级、时间线或关系图；预览在前端渲染，与 AI 生图二选一。</small>
+                </span>
+                <Switch.Root
+                  className="content-generation-switch"
+                  checked={generationOptions.useMermaidImages}
+                  onCheckedChange={(checked) => setGenerationOptions((prev) => ({ ...prev, useMermaidImages: checked }))}
+                  aria-label="是否生成 Mermaid 图片"
+                >
+                  <Switch.Thumb className="content-generation-switch-thumb" />
+                </Switch.Root>
+              </label>
+              {generationOptions.useMermaidImages && (
+                <p className="content-generation-config-note">当前 Mermaid 转图片使用的是 https://mermaid.ink/ 的免费接口，可能不稳定，导出 Word 后请仔细核对。</p>
+              )}
+            </div>
+            <div className="content-regenerate-actions">
+              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
+              <button type="button" className="primary-action" onClick={startGeneration} disabled={running}>开始生成</button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
 
       <Dialog.Root
         open={Boolean(requirementItem)}
@@ -441,6 +777,16 @@ function ContentEditPage({ outlineData, projectOverview, task, sections, onConte
               <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
               <button type="button" className="primary-action" onClick={startSectionRegeneration} disabled={running}>开始重新生成</button>
             </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+      <Dialog.Root open={Boolean(previewImage)} onOpenChange={(open) => !open && setPreviewImage(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="image-preview-modal" />
+          <Dialog.Content className="image-preview-card">
+            <Dialog.Close className="image-preview-close" type="button" aria-label="关闭图片预览">×</Dialog.Close>
+            <Dialog.Title>{previewImage?.alt || '图片预览'}</Dialog.Title>
+            {previewImage && <img src={previewImage.src} alt={previewImage.alt} />}
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

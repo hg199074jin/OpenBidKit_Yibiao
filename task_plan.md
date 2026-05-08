@@ -66,6 +66,27 @@
 | Error | Attempt | Resolution |
 | --- | --- | --- |
 
+## Current Task: Step04 正文首批体验修正
+
+### Goal
+先修复已暴露的正文生成体验问题：规范 `<br>` 换行、去掉图例中的“AI 生成示意”、图片和图例居中、支持图片全屏查看，并在开发者模式下显示配图统计。
+
+### Phases
+- [completed] 1. 生成正文落盘前规范 `<br>`，并强化 Prompt 禁止随机 Mermaid 和 HTML 换行。
+- [completed] 2. 修改图片图例文案为 `图：xxx`，前端和 Word 导出中图片/图例居中。
+- [completed] 3. 正文 Markdown 图片支持点击全屏查看。
+- [completed] 4. 后台任务写入配图统计，开发者模式下显示悬浮统计框。
+- [completed] 5. 运行 `npm run build`、正文任务 smoke test、Word `<br>` 导出 smoke test 和 `git diff --check`。
+
+### Decisions
+- 表格单元格内的 `<br>` 统一规范为 `<br />`，前端通过 `rehypeRaw` 渲染换行，Word 导出把 `<br />` 转为真实 Word 换行。
+- 当前批次不接 Mermaid 渲染和 Mermaid 导出，后续再做全局决策、Mermaid 与 AI 图二选一。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| `SettingsPage.tsx` 导入 `ImageModelStatus` 时报共享类型入口未导出 | 第一次 `npm run build` | 在 `client/src/shared/types/index.ts` 补导出 `ImageModelStatus` |
+
 ## Current Task: Step04 Word 导出 Markdown 完整转换
 
 ### Goal
@@ -138,6 +159,295 @@
 ### Decisions
 - 工具条只通过前置拖动手柄移动，避免普通按钮点击和拖动冲突。
 - 工具条保持悬浮层，不要求页面底部额外留白。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step04 正文智能表格与可选配图
+
+### Goal
+优化 Step04 正文生成：让文本模型先做章节编排决策，自然决定是否生成表格和是否配图；只有设置页生图模型明确测试可用时才调用生图接口生成图片并插入正文；预览和 Word 导出都能显示这些生成图片。
+
+### Phases
+- [completed] 1. 补充配置中的生图模型可用状态，并在设置页明确显示状态。
+- [completed] 2. 增加 Main 侧生图服务与工作区图片保存目录。
+- [completed] 3. 改造正文生成任务：章节编排 JSON、正文 Markdown 提示、可选配图插入。
+- [completed] 4. 增加 `yibiao-asset://generated-images/...` 预览协议和 Word 导出读取支持。
+- [completed] 5. 运行模块 smoke test、`npm run build` 和 `git diff --check` 验证。
+
+### Decisions
+- 配图和表格是否出现由 AI 的结构化编排决策决定，代码不按关键词或章节类型写死规则。
+- 正文文本模型不负责编造或输出图片链接；图片由生图接口生成后由程序插入 Markdown。
+- 生图模型只有 `status === 'available'` 时参与正文配图；用户修改生图配置后状态重置为 `untested`。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step04 正文第二批优化
+
+### Goal
+完成正文生成配置弹窗、Mermaid/AI 生图互斥、AI 生图整体择优，并修复 Mermaid 图片在预览 URL 与 Word 导出中的 mermaid.ink 编码和失败处理。
+
+### Phases
+- [completed] 1. 确认 mermaid.ink 源码解码逻辑和当前编码失败根因。
+- [completed] 2. 将正文生成和 Word 导出的 Mermaid 编码改为压缩 JSON 状态。
+- [completed] 3. 验证 Mermaid URL、正文任务插入 URL、Word 导出 media 嵌入。
+- [completed] 4. 运行 `npm run build` 和 `git diff --check`。
+- [completed] 5. 补齐最终进度记录和剩余手动验证提示。
+
+### Decisions
+- mermaid.ink `pako:` 编码使用 `zlib.deflateSync(JSON.stringify({ code, mermaid: { theme: 'default' } }))` + base64url。
+- Word 导出下载图片失败时不再抛出到整个导出流程，而是在文档中写入“图片无法导出”占位。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 正文任务 smoke test 正则未提取到 Markdown 图片 URL | 第一次正文任务 URL 验证 | 改用字符串下标截取 URL |
+| fake Mermaid 代码把 `\\n` 当作字面字符导致 mermaid.ink 返回 400 | 第二次正文任务 URL 验证 | 使用真实换行构造 Mermaid 代码 |
+
+## Current Task: Step04 正文第三批优化
+
+### Goal
+实现 Mermaid 前端本地渲染，保留 Word 导出时通过 mermaid.ink 转图片；为导出过程增加友好提示、进度条、失败日志和导出后核对提示。
+
+### Phases
+- [completed] 1. 梳理正文预览、导出 IPC、preload 类型和 Word 导出服务。
+- [completed] 2. 将正文生成中的 Mermaid 输出改为 Markdown `mermaid` 代码块，并在前端用 Mermaid 动态渲染。
+- [completed] 3. 为 `export:word` 增加进度事件、Renderer 进度弹窗和导出友好提示。
+- [completed] 4. 完善 Mermaid/图片导出失败 warning、控制台日志和导出结果核对提示。
+- [completed] 5. 运行正文任务 smoke test、Word 导出 smoke test、失败路径 smoke test、`npm run build` 和 `git diff --check`。
+
+### Decisions
+- 正文中不再为新生成 Mermaid 图写入 mermaid.ink 图片 URL，改为保存 ` ```mermaid ` 代码块，方便前端本地渲染和人工编辑。
+- Word 导出仍在 Electron Main 侧通过 mermaid.ink 转 PNG，Renderer 只显示导出进度和核对提示。
+- 图片导出失败不阻断 Word 生成；失败信息写入文档占位、返回 `warnings`，并在导出弹窗中展示。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step04 评审问题修复
+
+### Goal
+修复评审指出的正文编排单点失败阻断全文生成、WebP 生成图无法导出 Word、`rehypeRaw` 预览与 Word 导出不一致风险。
+
+### Phases
+- [completed] 1. 将单章节编排失败降级为纯正文生成，不再阻断整批任务。
+- [completed] 2. Word 导出识别 WebP，并在 Electron 运行时通过 `nativeImage` 转 PNG 后插入 docx。
+- [completed] 3. Word 导出补充常见 HTML 节点转换：`br`、`img`、`table`、列表、引用、粗体、斜体、代码等。
+- [completed] 4. 对不支持的 HTML 标签增加导出 warning，提示用户核对 Word。
+- [completed] 5. 运行模块加载、编排失败降级、HTML 导出、`npm run build` 和 `git diff --check` 验证。
+
+### Decisions
+- 保留正文页 `rehypeRaw`，因为这是当前明确需求；通过增强 Word 导出支持来减少预览/导出差异。
+- WebP 不直接写入 docx，避免 `docx` 默认 content type 不支持 WebP；导出前统一转 PNG。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| 普通 Node 进程中 `electron.nativeImage` 不可用，WebP smoke test 只能走 warning | WebP Node smoke test | 保留 Electron Main 运行时 `nativeImage` 转 PNG；Node 环境仅验证失败不崩溃 |
+
+## Current Task: Step04 编排进度展示优化
+
+### Goal
+将正文生成进度拆为编排进度和生成进度：编排阶段先显示绿色编排进度，并将目录待生成状态改为编排中；编排完成后再切回正文生成进度。
+
+### Phases
+- [completed] 1. 后台正文任务 stats 增加 `content.phase`、编排总数/完成数、生成总数/完成数。
+- [completed] 2. 前端生成统计根据阶段显示“编排统计”或“生成统计”。
+- [completed] 3. 编排阶段目录节点显示“编排中”，并使用绿色动效。
+- [completed] 4. 运行模块加载、正文任务 stats smoke test、`npm run build` 和 `git diff --check`。
+
+### Decisions
+- 编排阶段不改写每个 section 的持久化状态，避免把临时 UI 阶段污染到正文结果；Renderer 根据 `task.stats.content.phase === 'planning'` 派生显示“编排中”。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step04 前端性能优化
+
+### Goal
+在不改流式 chunk 保存节流的前提下，降低 Step04 生成中和生成后 UI 卡顿：减少重复事件、避免目录统计重复递归、避免无关状态变化触发 Markdown 重解析，并限制 UI 日志体积。
+
+### Phases
+- [completed] 1. 合并正文任务中开始/完成/失败处的重复状态事件，保留 chunk 实时保存。
+- [completed] 2. 预计算目录节点状态、叶子数和字数，`renderTree()` 直接读取缓存。
+- [completed] 3. 将正文 Markdown 渲染拆为 `memo` 组件，只有正文内容变化才重新解析。
+- [completed] 4. 前端任务状态日志裁剪为最近 80 条，并优先使用最新 `event.task`。
+- [completed] 5. 运行模块加载、正文任务事件 smoke test、`npm run build` 和 `git diff --check`。
+
+### Decisions
+- 暂不做 chunk 级节流，保留当前实时落盘和实时显示策略。
+- 日志裁剪只面向 Renderer UI 状态，用于降低每次 React state 更新的数据量。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| `buildOutlineMeta()` 中叶子状态推断成 `string` 导致 TypeScript 构建失败 | 第一次 `npm run build` | 显式标注 `status: TreeStatus` 和 `nodeMeta: OutlineNodeMeta` |
+
+## Current Task: Step04 全文重新生成清空旧内容
+
+### Goal
+点击“重新生成正文”应表示全文重新生成：开始前清空进度和已生成正文，不影响单章重新生成入口。
+
+### Phases
+- [completed] 1. 定位全文重新生成入口和 Main 侧正文任务初始化逻辑。
+- [completed] 2. Renderer 确认开始全文重新生成时清空 outline content、`contentGenerationSections` 和 `contentGenerationTask` 并持久化。
+- [completed] 3. Main 侧全文 `regenerate` 二次兜底清空 outline content，并用空 sections 计算初始进度。
+- [completed] 4. 运行全文重新生成清空 smoke test、`npm run build` 和 `git diff --check`。
+
+### Decisions
+- 单章重新生成仍沿用原流程，不清空全文内容。
+- 清空发生在生成配置弹窗点击“开始生成”后，而不是打开弹窗时。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step04 Mermaid 配图渲染失败自修复
+
+### Goal
+正文生成阶段在写入 Mermaid 代码块前先校验渲染结果；渲染失败时调用文本模型按错误信息最多修复 3 轮，仍失败则取消该 Mermaid 配图并保留正文，避免错误代码进入正文缓存。
+
+### Phases
+- [completed] 1. 补充 Mermaid 校验、修复 Prompt 和结构化修复结果处理。
+- [completed] 2. 接入正文生成流程：通过才追加 Mermaid，持续失败则取消配图并记录日志/统计。
+- [completed] 3. 运行修复成功与持续失败 smoke test。
+- [completed] 4. 运行 `npm run build`、`git diff --check` 并更新进度记录。
+
+### Decisions
+- 校验放在 Electron Main 的正文任务中，发生在 `appendMermaidImageMarkdown()` 之前。
+- 使用 mermaid.ink 图片接口做实际渲染校验，避免前端渲染失败后才发现问题。
+- 单个 Mermaid 配图失败不阻断正文生成。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| planning skill 示例路径指向 `$USERPROFILE\.opencode`，本机实际在 `.config\opencode` | 第一次 session catchup | 改用 `$USERPROFILE\.config\opencode\skills\...` 成功运行 |
+| PowerShell 中直接用复杂 `node -e` smoke test 时引号被剥离，Node 误把 `-->` 当成参数 | 第一次 Mermaid smoke test | 改用临时 `.cjs` smoke 文件运行，验证完成后删除 |
+| 修复成功 smoke test 预期修复 1 次，但 fetch stub 首次返回失败导致进入第 2 轮 | 第一次临时 smoke test | 调整 stub：初始失败由前端兼容规则触发，修复后首次 fetch 直接返回 PNG |
+
+## Current Task: Step04 配图阶段重构
+
+### Goal
+将 Mermaid 图和 AI 生图从正文生成中拆到独立配图阶段；编排阶段允许同一章节同时成为 AI 生图和 Mermaid 候选；配图阶段优先按 AI 生图上限选择章节，未入选 AI 但具备 Mermaid 候选的章节降级为 Mermaid。AI 生图并发 2，Mermaid 校验/修复并发 5；AI 入选后生图失败不再降级 Mermaid。
+
+### Phases
+- [completed] 1. 改编排模型：允许 AI/Mermaid 双候选，并更新提示词和标准化/校验逻辑。
+- [completed] 2. 将配图从 `runOne()` 正文生成中拆出，新增独立配图任务分配与执行。
+- [completed] 3. 新增配图阶段进度 `illustrating` 和前端显示。
+- [completed] 4. 运行 smoke test、`npm run build` 和 `git diff --check`。
+
+### Decisions
+- AI 生图入选但失败时，即使该章节也有 Mermaid 候选，也不自动降级 Mermaid。
+- AI 生图并发固定 2；Mermaid 校验/修复并发固定 5。
+- 正文阶段只保存正文和表格，配图阶段再读取当前正文并追加图片或 Mermaid 代码块。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step04 Word 导出表格与编号修复
+
+### Goal
+修复正文预览正常但 Word 导出异常的问题：Markdown 表格在导出时应稳定识别为 Word 表格；不同正文块中的有序列表编号应独立，不再跨块连续计数。
+
+### Phases
+- [completed] 1. 排查 `exportService.cjs` 中 Markdown 解析、表格识别和有序列表 numbering reference 使用方式。
+- [completed] 2. 在 Markdown 解析前接入表格预处理：统一换行、拆分被压成一行的表格、在表格前补空行。
+- [completed] 3. 为每个有序列表块分配独立 Word numbering reference，并按实际使用的 reference 生成编号配置。
+- [completed] 4. 运行导出 smoke test，验证压缩表格生成 `<w:tbl>`，两段独立有序列表使用不同 `numId`。
+- [completed] 5. 运行模块加载、`npm run build` 和 `git diff --check` 验证。
+
+### Decisions
+- 表格修复限定在导出层，不改正文缓存内容，避免影响页面预览和用户编辑内容。
+- 有序列表按 Markdown/HTML 列表块独立编号；每个 `ol` 或 Markdown ordered list 创建自己的 numbering reference。
+- `Document` 的 numbering 配置在正文转换完成后按实际用到的 reference 动态生成；没有有序列表时不写 numbering 配置。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step04 Word 导出压缩表格二次修复
+
+### Goal
+修复导出 Word 时仍有一个 Markdown 表格未转换的问题：模型将 GFM 分隔行 `| :--- | ... |` 和第一行/多行数据压到同一行，导致 `remark-gfm` 无法识别表格。
+
+### Phases
+- [completed] 1. 根据截图复现“表头正常、分隔行后拼接数据”的 Markdown 形态。
+- [completed] 2. 增强 `normalizeMarkdownTablesForDocx()`：按表头列数拆分压缩的分隔行和数据行。
+- [completed] 3. 运行截图同形态导出 smoke test，确认生成 `<w:tbl>`、表格行数正确且不保留 `:---` 文本。
+- [completed] 4. 运行模块加载、`npm run build` 和 `git diff --check` 验证。
+
+### Decisions
+- 继续只在导出层修复，不修改正文缓存中的 Markdown 原文。
+- 压缩表格拆分只在“当前行是表头、下一行前 N 列均为分隔列且后续还有数据列”时触发，避免误伤普通表格。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step04 单章重新生成复用编排
+
+### Goal
+调整单章重新生成流程：优先复用全文生成时保存的编排结果，不再默认重新编排；如果历史编排缺失，则只对当前小节执行一次编排，然后重新生成正文并按编排结果重新配图。
+
+### Phases
+- [completed] 1. 增加 `contentGenerationPlans` 持久化字段和前端状态类型。
+- [completed] 2. 全文生成整体编排完成后保存每个小节的最终配图决策：`ai`、`mermaid` 或 `none`。
+- [completed] 3. 单章重新生成优先读取历史编排；有历史时跳过 `planAll()` 和 `planOne()`。
+- [completed] 4. 单章历史缺失时仅编排目标小节，并保存该小节编排结果。
+- [completed] 5. 单章重新生成正文后按最终编排结果执行 AI 生图或 Mermaid 配图。
+- [completed] 6. 运行单章复用/缺失两条 smoke test、模块加载、`npm run build` 和 `git diff --check`。
+
+### Decisions
+- `contentGenerationPlans` 存在 `technical_plan.json` 根级，与 `contentGenerationSections` 同级。
+- 保存的是最终执行决策，而不是单纯候选：AI 入选为 `ai`，Mermaid 执行为 `mermaid`，未配图为 `none`。
+- 单章无历史编排时允许单章编排；单章编排中 Mermaid 默认可用，AI 生图仍受模型可用状态限制。
+- 全文重新生成和目录重新生成会清空旧 `contentGenerationPlans`，避免复用过期目录的编排。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step04 Word 导出 HTML 容器修复
+
+### Goal
+修复评审指出的 Word 导出预览不一致问题：`div`、`section`、`article` 等 HTML 容器中包裹表格、列表、图片等块级内容时，应递归导出为 Word 原生结构，而不是压平成普通文本。
+
+### Phases
+- [completed] 1. 核对 `exportService.cjs` 中 HTML 节点导出路径，确认评审命中真实问题。
+- [completed] 2. 新增块级子节点检测，块级容器包含表格/列表/引用/图片等内容时走 `htmlNodesToDocxBlocks()`。
+- [completed] 3. 保留纯内联 `div/section/article` 的原段落导出行为，避免不必要的段落拆分。
+- [completed] 4. 运行 HTML wrapper smoke test，验证包裹表格和列表仍导出为 Word 表格/列表。
+- [completed] 5. 运行模块加载、`npm run build` 和 `git diff --check`。
+
+### Decisions
+- 只对包含块级子节点的容器拆块递归；纯文本或内联内容仍使用 `htmlInlineRuns()` 输出单段落。
+- `p` 内如果出现表格、列表、图片等块级子节点，也拆块递归处理。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step04 Word 导出列表内表格修复
+
+### Goal
+修复 Markdown 列表项中的缩进表格导出 Word 时未被识别的问题。列表项内的 GFM 表格应保留缩进，让 `remark-gfm` 能识别为表格 AST，并最终导出为 Word 原生表格。
+
+### Phases
+- [completed] 1. 复现并定位：表格归一化中的 `expandInlineMarkdownTableRows()` 会丢掉分隔行前的列表缩进。
+- [completed] 2. 修改表格行拆分逻辑，空白前缀代表缩进时保留缩进，文本前缀仍拆成正文行。
+- [completed] 3. 修改压缩表格拆分逻辑，让拆出的分隔行和数据行继承表头行缩进。
+- [completed] 4. 运行列表项内表格 smoke test，确认生成 Word 表格、外围列表保留且不残留管道表格文本。
+- [completed] 5. 运行 `exportService` 模块加载、`npm run build` 和 `git diff --check`。
+
+### Decisions
+- 只在导出层修复 Markdown 归一化，不修改正文缓存原文。
+- 对 `|` 前只有空白的表格行保留原缩进；对 `表题 | 表头 | ...` 这类文本前缀仍按“正文 + 表格”拆分。
 
 ### Errors Encountered
 | Error | Attempt | Resolution |

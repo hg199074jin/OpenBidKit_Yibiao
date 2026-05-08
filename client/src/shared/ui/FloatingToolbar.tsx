@@ -37,8 +37,11 @@ function FloatingToolbar({ groups, label = '页面工具条' }: FloatingToolbarP
 
   const clampPosition = (left: number, top: number) => {
     const toolbar = toolbarRef.current;
+    const isFixed = toolbar ? window.getComputedStyle(toolbar).position === 'fixed' : false;
     const parent = toolbar?.offsetParent as HTMLElement | null;
-    const parentRect = parent?.getBoundingClientRect();
+    const parentRect = isFixed
+      ? { width: window.innerWidth, height: window.innerHeight }
+      : parent?.getBoundingClientRect();
     const toolbarRect = toolbar?.getBoundingClientRect();
 
     if (!parentRect || !toolbarRect) {
@@ -53,17 +56,18 @@ function FloatingToolbar({ groups, label = '页面工具条' }: FloatingToolbarP
 
   const startDrag = (event: PointerEvent<HTMLButtonElement>) => {
     const toolbar = toolbarRef.current;
+    const isFixed = toolbar ? window.getComputedStyle(toolbar).position === 'fixed' : false;
     const parent = toolbar?.offsetParent as HTMLElement | null;
 
-    if (!toolbar || !parent) {
+    if (!toolbar || (!isFixed && !parent)) {
       return;
     }
 
     const toolbarRect = toolbar.getBoundingClientRect();
-    const parentRect = parent.getBoundingClientRect();
+    const parentRect = parent?.getBoundingClientRect();
     const currentPosition = position || {
-      left: toolbarRect.left - parentRect.left,
-      top: toolbarRect.top - parentRect.top,
+      left: isFixed ? toolbarRect.left : toolbarRect.left - (parentRect?.left || 0),
+      top: isFixed ? toolbarRect.top : toolbarRect.top - (parentRect?.top || 0),
     };
 
     dragStateRef.current = {

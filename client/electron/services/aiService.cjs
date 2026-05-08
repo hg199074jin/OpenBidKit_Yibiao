@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { getAiLogsDir } = require('../utils/paths.cjs');
+const { getAiLogsDir, getGeneratedImagesDir } = require('../utils/paths.cjs');
 
 const AI_REQUEST_TIMEOUT_MS = 300000;
 
@@ -40,6 +40,77 @@ function createHeaders(apiKey) {
   return {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${apiKey}`,
+  };
+}
+
+function imageExtensionFromMime(mimeType) {
+  const normalized = String(mimeType || '').toLowerCase();
+  if (normalized.includes('jpeg') || normalized.includes('jpg')) return 'jpg';
+  if (normalized.includes('webp')) return 'webp';
+  if (normalized.includes('gif')) return 'gif';
+  if (normalized.includes('bmp')) return 'bmp';
+  return 'png';
+}
+
+function getImageModelAvailability(config) {
+  const imageConfig = config.image_model || {};
+  if (imageConfig.status !== 'available') {
+    return { available: false, status: imageConfig.status || 'untested', message: '生图模型未测试可用' };
+  }
+
+  if (!imageConfig.api_key) {
+    return { available: false, status: 'unavailable', message: '请先填写生图模型 API Key' };
+  }
+
+  if (!imageConfig.model_name) {
+    return { available: false, status: 'unavailable', message: '请先填写生图模型名称' };
+  }
+
+  return { available: true, status: 'available', message: '生图模型可用' };
+}
+
+function normalizeImagePrompt(request) {
+  const prompt = String(request.prompt || '').trim();
+  if (!prompt) {
+    throw new Error('生图提示词为空');
+  }
+
+  const styleHint = request.style === 'realistic_photo'
+    ? '画面采用专业实景照片风格，真实、克制、适合投标技术方案插图。'
+    : '画面采用工程项目图示风格，结构清晰、专业克制、适合投标技术方案插图。';
+  return `${prompt}\n\n${styleHint}\n避免出现品牌标识、水印、夸张营销元素和无关文字。`;
+}
+
+function safeImageResponse(data) {
+  return {
+    ...data,
+    data: Array.isArray(data?.data)
+      ? data.data.map((item) => ({ ...item, b64_json: item.b64_json ? '[base64 omitted]' : item.b64_json }))
+      : data?.data,
+    candidates: Array.isArray(data?.candidates) ? '[candidates omitted]' : data?.candidates,
+  };
+}
+
+async function downloadImage(url) {
+  const response = await fetch(url);
+  await ensureOk(response, '图片下载失败');
+  return {
+    buffer: Buffer.from(await response.arrayBuffer()),
+    mime_type: response.headers.get('content-type') || 'image/png',
+  };
+}
+
+function saveGeneratedImage(app, image) {
+  const imagesDir = getGeneratedImagesDir(app);
+  fs.mkdirSync(imagesDir, { recursive: true });
+  const extension = imageExtensionFromMime(image.mime_type);
+  const fileName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID()}.${extension}`;
+  const filePath = path.join(imagesDir, fileName);
+  fs.writeFileSync(filePath, image.buffer);
+  return {
+    asset_url: `yibiao-asset://generated-images/${encodeURIComponent(fileName)}`,
+    file_path: filePath,
+    mime_type: image.mime_type,
   };
 }
 
@@ -559,6 +630,160 @@ async function testGoogleImageModel(config) {
   };
 }
 
+async function generateVolcengineImage(app, config, request) {
+  const imageConfig = config.image_model || {};
+  const requestId = createRequestId();
+  const requestBody = {
+    model: imageConfig.model_name,
+    prompt: normalizeImagePrompt(request),
+    size: request.size || '2048x2048',
+    response_format: 'url',
+  };
+  let responseData = null;
+
+  try {
+    writeAiLog(app, config, {
+      request_id: requestId,
+      type: 'image-pending',
+      provider: 'volcengine',
+      url: `${trimBaseUrl(imageConfig.base_url || 'https://ark.cn-beijing.volces.com/api/v3')}/images/generations`,
+      request: requestBody,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    });
+    const response = await fetch(`${trimBaseUrl(imageConfig.base_url || 'https://ark.cn-beijing.volces.com/api/v3')}/images/generations`, {
+      method: 'POST',
+      headers: createHeaders(imageConfig.api_key),
+      body: JSON.stringify(requestBody),
+    });
+    await ensureOk(response, '火山方舟生图失败');
+    responseData = await response.json();
+
+    const item = responseData.data?.[0] || {};
+    const image = item.b64_json
+      ? { buffer: Buffer.from(item.b64_json, 'base64'), mime_type: 'image/png' }
+      : item.url
+        ? await downloadImage(item.url)
+        : null;
+
+    if (!image) {
+      throw new Error('火山方舟生图未返回图片数据');
+    }
+
+    const saved = saveGeneratedImage(app, image);
+    writeAiLog(app, config, {
+      request_id: requestId,
+      type: 'image',
+      provider: 'volcengine',
+      request: requestBody,
+      response: safeImageResponse(responseData),
+      result: saved,
+      created_at: new Date().toISOString(),
+    });
+    return { success: true, title: request.title || '', ...saved };
+  } catch (error) {
+    writeAiLog(app, config, {
+      request_id: requestId,
+      type: 'image-error',
+      provider: 'volcengine',
+      request: requestBody,
+      response: responseData ? safeImageResponse(responseData) : null,
+      error: error.message,
+      created_at: new Date().toISOString(),
+    });
+    throw error;
+  }
+}
+
+async function generateGoogleImage(app, config, request) {
+  const imageConfig = config.image_model || {};
+  const requestId = createRequestId();
+  const requestBody = {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: normalizeImagePrompt(request) }],
+      },
+    ],
+    generationConfig: {
+      responseModalities: ['TEXT', 'IMAGE'],
+    },
+  };
+  let responseData = null;
+
+  try {
+    writeAiLog(app, config, {
+      request_id: requestId,
+      type: 'image-pending',
+      provider: 'google-ai-studio',
+      url: `${trimBaseUrl(imageConfig.base_url || 'https://generativelanguage.googleapis.com/v1beta')}/models/${encodeURIComponent(imageConfig.model_name)}:generateContent`,
+      request: requestBody,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    });
+    const response = await fetch(`${trimBaseUrl(imageConfig.base_url || 'https://generativelanguage.googleapis.com/v1beta')}/models/${encodeURIComponent(imageConfig.model_name)}:generateContent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': imageConfig.api_key,
+      },
+      body: JSON.stringify(requestBody),
+    });
+    await ensureOk(response, 'Google AI Studio 生图失败');
+    responseData = await response.json();
+    const parts = responseData.candidates?.[0]?.content?.parts || [];
+    const imagePart = parts.find((part) => part.inlineData?.data || part.inline_data?.data);
+    const inlineData = imagePart?.inlineData || imagePart?.inline_data;
+
+    if (!inlineData?.data) {
+      throw new Error('Google AI Studio 生图未返回图片数据');
+    }
+
+    const saved = saveGeneratedImage(app, {
+      buffer: Buffer.from(inlineData.data, 'base64'),
+      mime_type: inlineData.mimeType || inlineData.mime_type || 'image/png',
+    });
+    writeAiLog(app, config, {
+      request_id: requestId,
+      type: 'image',
+      provider: 'google-ai-studio',
+      request: requestBody,
+      response: safeImageResponse(responseData),
+      result: saved,
+      created_at: new Date().toISOString(),
+    });
+    return { success: true, title: request.title || '', ...saved };
+  } catch (error) {
+    writeAiLog(app, config, {
+      request_id: requestId,
+      type: 'image-error',
+      provider: 'google-ai-studio',
+      request: requestBody,
+      response: responseData ? safeImageResponse(responseData) : null,
+      error: error.message,
+      created_at: new Date().toISOString(),
+    });
+    throw error;
+  }
+}
+
+async function generateImageWithConfig(app, config, request) {
+  const availability = getImageModelAvailability(config);
+  if (!availability.available) {
+    throw new Error(availability.message);
+  }
+
+  if (config.image_model?.provider === 'volcengine') {
+    return generateVolcengineImage(app, config, request);
+  }
+
+  if (config.image_model?.provider === 'google-ai-studio') {
+    return generateGoogleImage(app, config, request);
+  }
+
+  throw new Error('当前生图服务商暂不支持正文配图');
+}
+
 function createAiService({ app, configStore }) {
   return {
     async chat(request) {
@@ -591,6 +816,15 @@ function createAiService({ app, configStore }) {
       }
 
       throw new Error('当前服务商暂不支持测试');
+    },
+
+    getImageModelAvailability() {
+      return getImageModelAvailability(configStore.load());
+    },
+
+    async generateImage(request) {
+      const config = configStore.load();
+      return generateImageWithConfig(app, config, request);
     },
 
     async listModels() {
