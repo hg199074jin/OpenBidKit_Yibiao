@@ -4,6 +4,7 @@ export interface OutlineItem {
   description: string;
   source_requirement_id?: string;
   source_requirement_title?: string;
+  knowledge_item_ids?: string[];
   children?: OutlineItem[];
   content?: string;
 }

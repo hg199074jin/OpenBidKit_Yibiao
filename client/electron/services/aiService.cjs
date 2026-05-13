@@ -295,10 +295,12 @@ async function emitProgress(progressCallback, message) {
   await Promise.resolve(progressCallback(message));
 }
 
-async function repairJsonResponse(app, config, invalidContent, issues, temperature, responseFormat, progressCallback, progressLabel) {
+async function repairJsonResponse(app, config, invalidContent, issues, temperature, responseFormat, progressCallback, progressLabel, repairMessagesBuilder) {
   await emitProgress(progressCallback, `${progressLabel}格式校验失败，正在基于当前结果进行修复。`);
   return chatWithConfig(app, config, {
-    messages: buildJsonRepairMessages(invalidContent, issues, progressLabel),
+    messages: repairMessagesBuilder
+      ? repairMessagesBuilder({ invalidContent, issues, progressLabel })
+      : buildJsonRepairMessages(invalidContent, issues, progressLabel),
     temperature,
     response_format: responseFormat,
   });
@@ -341,6 +343,7 @@ async function collectJsonResponseWithConfig(app, config, request) {
           responseFormat,
           request.progressCallback,
           progressLabel,
+          request.repairMessagesBuilder,
         );
         const repairedParsed = parseJsonContent(repairedContent);
         const repairedNormalized = request.normalizer ? request.normalizer(repairedParsed) : repairedParsed;
@@ -831,6 +834,10 @@ function createAiService({ app, configStore }) {
 
     getImageModelAvailability() {
       return getImageModelAvailability(configStore.load());
+    },
+
+    isDeveloperMode() {
+      return Boolean(configStore.load()?.developer_mode);
     },
 
     async generateImage(request) {

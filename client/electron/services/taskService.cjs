@@ -25,7 +25,7 @@ function createTask(type) {
   };
 }
 
-function createTaskService({ aiService, workspaceStore }) {
+function createTaskService({ aiService, workspaceStore, knowledgeBaseService }) {
   const subscribers = new Set();
   const activeTasks = new Map();
 
@@ -80,7 +80,7 @@ function createTaskService({ aiService, workspaceStore }) {
     const technicalPlan = workspaceStore.updateTechnicalPlan({ ...initialPartial, [taskField]: currentTask });
     emit(currentTask, technicalPlan);
 
-    runner({ aiService, workspaceStore, updateTask, payload }).catch((error) => {
+    runner({ aiService, workspaceStore, knowledgeBaseService, updateTask, payload }).catch((error) => {
       const failedTask = updateTask({ status: 'error', error: error.message || '任务执行失败' });
       const nextPlan = workspaceStore.updateTechnicalPlan({ [taskField]: failedTask });
       emit(failedTask, nextPlan);
@@ -97,7 +97,10 @@ function createTaskService({ aiService, workspaceStore }) {
       return startTask('bid-analysis', payload, runBidAnalysisTask);
     },
     startOutlineGeneration(payload) {
-      return startTask('outline-generation', payload, runOutlineGenerationTask, { outlineMode: payload.mode });
+      return startTask('outline-generation', payload, runOutlineGenerationTask, {
+        outlineMode: payload?.mode,
+        referenceKnowledgeDocumentIds: Array.isArray(payload?.reference_knowledge_document_ids) ? payload.reference_knowledge_document_ids : [],
+      });
     },
     startContentGeneration(payload) {
       return startTask('content-generation', payload, runContentGenerationTask);

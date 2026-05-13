@@ -3,6 +3,75 @@ function formatSuggestions(suggestions) {
   return `\n\n本轮修正建议：\n${suggestions.map((item, index) => `${index + 1}. ${item}`).join('\n')}`;
 }
 
+const KNOWLEDGE_RESUME_MAX_CHARS = 220;
+const MAX_KNOWLEDGE_ADDITIONS = 30;
+
+function truncateText(value, maxLength) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function renderKnowledgeItemsForPrompt(items) {
+  if (!items?.length) return '';
+  return items.map((item, index) => [
+    `${index + 1}. title: ${item.title}`,
+    `   resume: ${truncateText(item.resume, KNOWLEDGE_RESUME_MAX_CHARS)}`,
+  ].join('\n')).join('\n');
+}
+
+function collectKnowledgeAdditionParents(items) {
+  const parents = [];
+  function visit(nodes, level = 1, ancestors = []) {
+    (nodes || []).forEach((item) => {
+      const id = String(item?.id || '').trim();
+      const title = String(item?.title || '').trim();
+      if (id && level === 2) {
+        parents.push({
+          id,
+          title,
+          parentTitle: ancestors[0]?.title || '',
+          childTitles: (item.children || []).map((child) => String(child?.title || '').trim()).filter(Boolean),
+        });
+      }
+      if (item?.children?.length) visit(item.children, level + 1, [...ancestors, { id, title }]);
+    });
+  }
+  visit(items || []);
+  return parents;
+}
+
+function formatKnowledgeAdditionParents(parents) {
+  return (parents || []).map((item) => [
+    `- ${item.id} ${item.title || '未命名二级目录'}（所属一级：${item.parentTitle || '未命名一级目录'}）`,
+    `  已有三级目录：${item.childTitles.length ? item.childTitles.join('；') : '无'}`,
+  ].join('\n')).join('\n');
+}
+
+function normalizeReferenceDocumentIds(payload) {
+  return Array.isArray(payload?.reference_knowledge_document_ids)
+    ? [...new Set(payload.reference_knowledge_document_ids.map((id) => String(id || '').trim()).filter(Boolean))]
+    : [];
+}
+
+function loadOutlineKnowledgeItems(knowledgeBaseService, documentIds, log) {
+  if (!documentIds.length) return [];
+  if (!knowledgeBaseService?.getOutlineReferences) {
+    log('未找到知识库读取服务，跳过参考知识库。', 6);
+    return [];
+  }
+
+  try {
+    log(`正在读取 ${documentIds.length} 个参考知识库文档。`, 6);
+    const result = knowledgeBaseService.getOutlineReferences(documentIds);
+    const items = Array.isArray(result?.items) ? result.items : [];
+    log(items.length ? `已读取 ${items.length} 条轻量知识条目。` : '未读取到可用知识库条目，将按普通目录生成。', 7);
+    return items;
+  } catch (error) {
+    log(`读取参考知识库失败，将按普通目录生成：${error.message || String(error)}`, 7);
+    return [];
+  }
+}
+
 function outlineSystemPrompt() {
   return `你是一个专业的标书编写专家。根据提供的项目概述和技术评分要求，生成投标文件中技术标部分的目录结构。
 如果用户提供了自己编写的目录，你要保证目录满足技术评分要求，并充分结合用户自己编写的目录。
@@ -128,14 +197,15 @@ function generateAlignedChildrenMessages({ overview, requirements, parentItem, g
 5. 每个节点必须包含 id、title、description，三级目录继续使用 children 字段
 6. 章节编号必须以给定的一级目录编号为前缀，例如父级是 2，则二级目录编号从 2.1 开始，三级目录编号从 2.1.1 开始
 7. 除了 JSON 结果外，不要输出任何其他内容`;
-  return [
+  const messages = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: `项目概述：\n${overview}` },
     { role: 'user', content: `技术评分要求原文：\n${requirements}` },
     { role: 'user', content: `当前固定一级目录：\n编号：${parentItem.id}\n标题：${parentItem.title}\n描述：${parentItem.description || ''}` },
     { role: 'user', content: `当前对应的技术评分大类：\nrequirement_id：${group.requirement_id}\n标题：${group.title}\n描述：${group.description}\n细项：\n${detailContent}` },
-    { role: 'user', content: `请仅生成该一级目录下的二级、三级目录，一级目录标题必须保持为当前给定标题，返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` },
   ];
+  messages.push({ role: 'user', content: `请仅生成该一级目录下的二级、三级目录，一级目录标题必须保持为当前给定标题，返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` });
+  return messages;
 }
 
 function generateChildrenMessages({ overview, requirements, parentItem, suggestions }) {
@@ -148,13 +218,14 @@ function generateChildrenMessages({ overview, requirements, parentItem, suggesti
 4. 二级目录下如有三级目录，同样使用 children 字段
 5. 章节编号必须以给定的一级目录编号为前缀，例如父级是 2，则二级目录编号从 2.1 开始，三级目录编号从 2.1.1 开始
 6. 除了 JSON 结果外，不要输出任何其他内容`;
-  return [
+  const messages = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: `项目概述：\n${overview}` },
     { role: 'user', content: `技术评分要求：\n${requirements}` },
     { role: 'user', content: `当前一级目录：\n编号：${parentItem.id}\n标题：${parentItem.title}\n描述：${parentItem.description || ''}` },
-    { role: 'user', content: `请仅生成该一级目录下的二级、三级目录，返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` },
   ];
+  messages.push({ role: 'user', content: `请仅生成该一级目录下的二级、三级目录，返回格式必须是 {"children": [...]}。${formatSuggestions(suggestions)}` });
+  return messages;
 }
 
 function reviewOutlineMessages({ overview, requirements, outline }) {
@@ -197,6 +268,60 @@ function reviewAlignedOutlineMessages({ overview, requirements, groups, outline 
   ];
 }
 
+function generateKnowledgeAdditionMessages({ overview, requirements, outline, knowledgeItems }) {
+  const additionParents = collectKnowledgeAdditionParents(outline.outline || []);
+  const sampleParent = additionParents[0]?.id || '';
+  const instructionPrompt = `你是一个严格的标书目录补充专家。你只能根据参考知识库判断现有二级目录下是否缺少三级目录，并只输出新增三级目录。
+
+要求：
+1. 已有一级目录和二级目录都已经固定，不允许新增、删除、重命名、合并或调整顺序
+2. 只能新增三级目录，parent_id 必须逐字复制“可补充二级目录 parent_id”中的某一个 ID
+3. 不允许输出 bindings、knowledge_item_ids、id、children、outline 或完整目录
+4. 不要把知识库条目绑定到目录；知识库只作为判断是否缺少三级目录的参考材料
+5. 只补充与招标项目、评分项、现有二级目录主题强相关且当前三级目录确实缺失的内容
+6. 不要重复已有三级目录，也不要输出同义重复目录
+7. 如果没有确实需要补充的三级目录，返回空 additions 数组
+8. 只返回 JSON，不要输出解释文字
+
+返回格式：
+{
+  "additions": [
+    { "parent_id": "${sampleParent}", "title": "新增三级目录标题", "description": "新增三级目录说明" }
+  ]
+}`;
+  return [
+    { role: 'user', content: instructionPrompt },
+    { role: 'user', content: `项目概述：\n${overview}` },
+    { role: 'user', content: `技术评分要求：\n${requirements}` },
+    { role: 'user', content: `当前完整目录 JSON：\n${JSON.stringify(outline, null, 2)}` },
+    { role: 'user', content: `可补充二级目录 parent_id（只能逐字复制以下 ID，并在其下新增三级目录）：\n${formatKnowledgeAdditionParents(additionParents)}` },
+    { role: 'user', content: `参考知识库轻量条目如下。注意：这些只是参考资料，不要输出知识库 ID，也不要绑定知识库条目。\n${renderKnowledgeItemsForPrompt(knowledgeItems)}` },
+    { role: 'user', content: '请只返回知识库补充三级目录 JSON：additions。每条 additions 只能包含 parent_id、title、description。' },
+  ];
+}
+
+function generateKnowledgeAdditionRepairMessages({ invalidContent, issues }, additionParents) {
+  return [
+    {
+      role: 'user',
+      content: `你是一个严格的 JSON 修复器。请把模型输出修复为“知识库补充三级目录”JSON。
+
+必须满足：
+1. 顶层只能有 additions 数组
+2. 每条 additions 只能有 parent_id、title、description
+3. parent_id 必须逐字复制允许的二级目录 ID
+4. 禁止输出 bindings、knowledge_item_ids、id、children、outline 或完整目录
+5. 如果没有可补充三级目录，返回 {"additions":[]}
+6. 只返回 JSON，不要输出解释文字
+
+允许的二级目录 parent_id：
+${formatKnowledgeAdditionParents(additionParents)}`,
+    },
+    { role: 'user', content: `错误列表：\n${issues}` },
+    { role: 'user', content: `待修复内容：\n\`\`\`json\n${String(invalidContent || '').slice(0, 60000)}\n\`\`\`` },
+  ];
+}
+
 function requireObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${label} 必须是对象`);
@@ -218,7 +343,19 @@ function requireField(value, label) {
   return String(value);
 }
 
-function normalizeOutlineItem(item, path = 'outline[]') {
+function normalizeKnowledgeItemIds(value, allowedKnowledgeIds) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const ids = value.map((id) => String(id || '').trim()).filter(Boolean);
+  if (allowedKnowledgeIds instanceof Set) {
+    return [...new Set(ids.filter((id) => allowedKnowledgeIds.has(id)))];
+  }
+  return [...new Set(ids)];
+}
+
+function normalizeOutlineItem(item, path = 'outline[]', allowedKnowledgeIds) {
   const raw = requireObject(item, path);
   const normalized = {
     id: requireField(raw.id, `${path}.id`),
@@ -235,26 +372,30 @@ function normalizeOutlineItem(item, path = 'outline[]') {
   if (raw.content !== undefined && raw.content !== null) {
     normalized.content = String(raw.content);
   }
+  const knowledgeItemIds = normalizeKnowledgeItemIds(raw.knowledge_item_ids, allowedKnowledgeIds);
+  if (knowledgeItemIds.length) {
+    normalized.knowledge_item_ids = knowledgeItemIds;
+  }
   if (raw.children !== undefined && raw.children !== null) {
     const children = requireArray(raw.children, `${path}.children`);
     if (children.length) {
-      normalized.children = children.map((child, index) => normalizeOutlineItem(child, `${path}.children[${index}]`));
+      normalized.children = children.map((child, index) => normalizeOutlineItem(child, `${path}.children[${index}]`, allowedKnowledgeIds));
     }
   }
 
   return normalized;
 }
 
-function normalizeOutlineResponse(payload) {
+function normalizeOutlineResponse(payload, allowedKnowledgeIds) {
   const raw = requireObject(payload, 'OutlineResponse');
   const outline = requireArray(raw.outline, 'outline');
-  return { outline: outline.map((item, index) => normalizeOutlineItem(item, `outline[${index}]`)) };
+  return { outline: outline.map((item, index) => normalizeOutlineItem(item, `outline[${index}]`, allowedKnowledgeIds)) };
 }
 
-function normalizeChildrenResponse(payload) {
+function normalizeChildrenResponse(payload, allowedKnowledgeIds) {
   const raw = requireObject(payload, 'OutlineChildrenResponse');
   const children = requireArray(raw.children, 'children');
-  return { children: children.map((item, index) => normalizeOutlineItem(item, `children[${index}]`)) };
+  return { children: children.map((item, index) => normalizeOutlineItem(item, `children[${index}]`, allowedKnowledgeIds)) };
 }
 
 function normalizeReviewResponse(payload) {
@@ -286,6 +427,173 @@ function normalizeRequirementGroupsResponse(payload) {
     };
   });
   return { groups };
+}
+
+function createOutlineNodeMap(items) {
+  const map = new Map();
+  function visit(nodes, level = 1, parent = null) {
+    (nodes || []).forEach((item) => {
+      const id = String(item?.id || '').trim();
+      if (id) {
+        map.set(id, { item, level, parent });
+      }
+      if (item?.children?.length) {
+        visit(item.children, level + 1, item);
+      }
+    });
+  }
+  visit(items || []);
+  return map;
+}
+
+function normalizeTitleKey(value) {
+  return String(value || '').replace(/\s+/g, '').toLowerCase();
+}
+
+function countNestedArrayEntries(value, fieldName) {
+  if (!value || typeof value !== 'object') return 0;
+  if (Array.isArray(value)) {
+    return value.reduce((sum, item) => sum + countNestedArrayEntries(item, fieldName), 0);
+  }
+  return Object.entries(value).reduce((sum, [key, child]) => {
+    const current = key === fieldName && Array.isArray(child) ? child.length : 0;
+    return sum + current + countNestedArrayEntries(child, fieldName);
+  }, 0);
+}
+
+function summarizeRawKnowledgeAdditions(payload) {
+  const raw = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  return {
+    additions: Array.isArray(payload) ? payload.length : (Array.isArray(raw.additions) ? raw.additions.length : 0),
+    bindings: Array.isArray(raw.bindings) ? raw.bindings.length : 0,
+    knowledge_refs: countNestedArrayEntries(payload, 'knowledge_item_ids'),
+    children: countNestedArrayEntries(payload, 'children'),
+  };
+}
+
+function formatAdditionSummary(summary) {
+  return `additions=${summary.additions}，bindings=${summary.bindings}，knowledge_refs=${summary.knowledge_refs}，children=${summary.children}`;
+}
+
+function getKnowledgeAdditionCandidates(payload) {
+  if (Array.isArray(payload)) return payload;
+  const raw = requireObject(payload, 'KnowledgeAdditionsResponse');
+  if (raw.additions !== undefined && raw.additions !== null) return requireArray(raw.additions, 'additions');
+  if (Array.isArray(raw.items)) return raw.items;
+  if (Array.isArray(raw.directories)) return raw.directories;
+  return [];
+}
+
+function createExistingThirdTitleKeys(outlineItems) {
+  const keys = new Set();
+  function visit(nodes, level = 1) {
+    (nodes || []).forEach((item) => {
+      const id = String(item?.id || '').trim();
+      if (level === 2 && id) {
+        (item.children || []).forEach((child) => {
+          const key = normalizeTitleKey(child?.title);
+          if (key) keys.add(`${id}::${key}`);
+        });
+      }
+      if (item?.children?.length) visit(item.children, level + 1);
+    });
+  }
+  visit(outlineItems || []);
+  return keys;
+}
+
+function resolveKnowledgeAdditionParent(parentId, context, stats) {
+  const parentInfo = context.outlineNodeMap.get(parentId);
+  if (!parentInfo) return null;
+  if (parentInfo.level === 2) return { parentId, parentInfo };
+  if (parentInfo.level === 3 && parentInfo.parent?.id) {
+    const nextParentId = String(parentInfo.parent.id || '').trim();
+    const nextParentInfo = context.outlineNodeMap.get(nextParentId);
+    if (nextParentInfo?.level === 2) {
+      stats.adjustedParent += 1;
+      return { parentId: nextParentId, parentInfo: nextParentInfo };
+    }
+  }
+  return null;
+}
+
+function normalizeKnowledgeAddition(addition, path, context, stats, seenKeys, issues) {
+  if (!addition || typeof addition !== 'object' || Array.isArray(addition)) {
+    stats.dropped += 1;
+    issues.push(`${path} 必须是对象`);
+    return null;
+  }
+
+  const rawParentId = String(addition.parent_id || '').trim();
+  if (!rawParentId) {
+    stats.dropped += 1;
+    issues.push(`${path}.parent_id 缺失`);
+    return null;
+  }
+  const resolvedParent = resolveKnowledgeAdditionParent(rawParentId, context, stats);
+  if (!resolvedParent) {
+    stats.dropped += 1;
+    issues.push(`${path}.parent_id=${rawParentId} 不是现有二级目录 ID`);
+    return null;
+  }
+
+  const title = String(addition.title || addition.name || '').trim();
+  if (!title) {
+    stats.dropped += 1;
+    issues.push(`${path}.title 缺失或为空`);
+    return null;
+  }
+
+  const dedupeKey = `${resolvedParent.parentId}::${normalizeTitleKey(title)}`;
+  if (seenKeys.has(dedupeKey)) {
+    stats.dropped += 1;
+    return null;
+  }
+  seenKeys.add(dedupeKey);
+  stats.retained += 1;
+
+  const description = String(addition.description || addition.summary || addition.resume || title).trim() || title;
+  return { parent_id: resolvedParent.parentId, title, description };
+}
+
+function normalizeKnowledgeAdditionsResponse(payload, context) {
+  const raw = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  const rawSummary = summarizeRawKnowledgeAdditions(payload);
+  if (context.rawAttempts) context.rawAttempts.push(rawSummary);
+
+  const candidates = getKnowledgeAdditionCandidates(payload);
+  const stats = { retained: 0, dropped: 0, adjustedParent: 0 };
+  const issues = [];
+  const seenKeys = createExistingThirdTitleKeys(context.outline || []);
+  const additions = [];
+
+  candidates.forEach((addition, index) => {
+    if (additions.length >= MAX_KNOWLEDGE_ADDITIONS) {
+      stats.dropped += 1;
+      return;
+    }
+    const normalized = normalizeKnowledgeAddition(addition, `additions[${index}]`, context, stats, seenKeys, issues);
+    if (normalized) additions.push(normalized);
+  });
+  if (context.normalizationStats) context.normalizationStats.push(stats);
+
+  const shouldRepair = !additions.length && (
+    raw.outline !== undefined
+    || raw.bindings !== undefined
+    || raw.knowledge_item_ids !== undefined
+    || (candidates.length > 0 && issues.length > 0)
+  );
+  if (shouldRepair) {
+    const reason = issues.length ? issues.join('；') : '模型返回了 bindings/outline/knowledge_item_ids，但没有可应用的三级目录 additions';
+    if (context.debugLog) context.debugLog(`进入修复：${reason}`);
+    throw new Error(`知识库补充三级目录格式无效：${reason}`);
+  }
+
+  return { additions };
+}
+
+function validateKnowledgeAdditionsResponse(payload) {
+  requireArray(payload.additions, 'additions');
 }
 
 function outlineDepth(items) {
@@ -360,6 +668,54 @@ function renumber(items, parent = '') {
   });
 }
 
+function cloneOutlineItems(items) {
+  return (items || []).map((item) => ({
+    ...item,
+    ...(item.knowledge_item_ids?.length ? { knowledge_item_ids: [...item.knowledge_item_ids] } : {}),
+    ...(item.children?.length ? { children: cloneOutlineItems(item.children) } : {}),
+  }));
+}
+
+function createOutlineItemFromKnowledgeAddition(addition) {
+  return {
+    id: '',
+    title: addition.title,
+    description: addition.description,
+  };
+}
+
+function validateTopLevelPreserved(beforeItems, afterItems) {
+  if ((beforeItems || []).length !== (afterItems || []).length) {
+    throw new Error('知识库补目录不允许改变一级目录数量');
+  }
+  (beforeItems || []).forEach((beforeItem, index) => {
+    const afterItem = afterItems[index];
+    if (String(beforeItem.title || '').trim() !== String(afterItem?.title || '').trim()) {
+      throw new Error('知识库补目录不允许修改一级目录标题');
+    }
+  });
+}
+
+function applyKnowledgeAdditions(outlinePayload, patch) {
+  const beforeOutline = outlinePayload.outline || [];
+  const outline = cloneOutlineItems(beforeOutline);
+  const nodeMap = createOutlineNodeMap(outline);
+
+  (patch.additions || []).forEach((addition) => {
+    const parent = nodeMap.get(addition.parent_id);
+    if (!parent || parent.level !== 2) {
+      return;
+    }
+    const nextItem = createOutlineItemFromKnowledgeAddition(addition);
+    parent.item.children = [...(parent.item.children || []), nextItem];
+  });
+
+  const normalized = normalizeOutlineResponse({ outline: renumber(outline) }, new Set());
+  validateCompleteOutline(normalized);
+  validateTopLevelPreserved(beforeOutline, normalized.outline);
+  return normalized;
+}
+
 async function collectJson(aiService, options) {
   return aiService.collectJsonResponse ? aiService.collectJsonResponse(options) : aiService.requestJson(options);
 }
@@ -369,7 +725,7 @@ async function generateFull(aiService, payload, suggestions, log, progress = 20)
   return collectJson(aiService, {
     messages: generateOutlineMessages({ ...payload, suggestions }),
     temperature: 0.7,
-    normalizer: normalizeOutlineResponse,
+    normalizer: (value) => normalizeOutlineResponse(value, new Set()),
     validator: validateCompleteOutline,
     progressCallback: (message) => log(message, progress),
     progressLabel: '完整目录',
@@ -381,7 +737,7 @@ async function generateTopLevel(aiService, payload, suggestions, log) {
   return collectJson(aiService, {
     messages: generateTopLevelOutlineMessages({ ...payload, suggestions }),
     temperature: 0.7,
-    normalizer: normalizeOutlineResponse,
+    normalizer: (value) => normalizeOutlineResponse(value, new Set()),
     validator: validateTopLevelOutline,
     progressCallback: (message) => log(message, 25),
     progressLabel: '一级目录',
@@ -390,15 +746,16 @@ async function generateTopLevel(aiService, payload, suggestions, log) {
 }
 
 async function generateChildren(aiService, payload, parentItem, suggestions, log, progress) {
-  return collectJson(aiService, {
+  const response = await collectJson(aiService, {
     messages: generateChildrenMessages({ ...payload, parentItem, suggestions }),
     temperature: 0.7,
-    normalizer: normalizeChildrenResponse,
+    normalizer: (value) => normalizeChildrenResponse(value, new Set()),
     validator: validateChildrenOutline,
     progressCallback: (message) => log(message, progress),
     progressLabel: `章节 ${parentItem.title || '未命名章节'} 子目录`,
     failureMessage: '模型返回的目录数据格式无效',
   });
+  return response;
 }
 
 async function generateFallback(aiService, payload, suggestions, log, progressRange = { start: 30, end: 75 }, topProgress = 25) {
@@ -413,7 +770,7 @@ async function generateFallback(aiService, payload, suggestions, log, progressRa
     assembled.push({ id: item.id, title: item.title, description: item.description, ...(children.length ? { children } : {}) });
   }
   log('分步目录生成完成，正在整理目录编号。', progressRange.end);
-  const outline = normalizeOutlineResponse({ outline: renumber(assembled) });
+  const outline = normalizeOutlineResponse({ outline: renumber(assembled) }, new Set());
   validateCompleteOutline(outline);
   return outline;
 }
@@ -501,15 +858,16 @@ async function extractRequirementGroups(aiService, requirements, suggestions, lo
 }
 
 async function generateAlignedChildrenForGroup(aiService, payload, parentItem, group, suggestions, log, progress) {
-  return collectJson(aiService, {
+  const response = await collectJson(aiService, {
     messages: generateAlignedChildrenMessages({ ...payload, parentItem, group, suggestions }),
     temperature: 0.7,
-    normalizer: normalizeChildrenResponse,
+    normalizer: (value) => normalizeChildrenResponse(value, new Set()),
     validator: validateChildrenOutline,
     progressCallback: (message) => log(message, progress),
     progressLabel: `章节 ${parentItem.title || '未命名章节'} 子目录`,
     failureMessage: '模型返回的目录数据格式无效',
   });
+  return response;
 }
 
 async function buildAligned(aiService, payload, groups, suggestions, log, progressRange = { start: 30, end: 75 }) {
@@ -524,7 +882,7 @@ async function buildAligned(aiService, payload, groups, suggestions, log, progre
     assembled.push({ ...item, ...(children.length ? { children } : {}) });
   }
   log('评分项对齐目录生成完成，正在整理目录编号。', progressRange.end);
-  const outline = normalizeOutlineResponse({ outline: renumber(assembled) });
+  const outline = normalizeOutlineResponse({ outline: renumber(assembled) }, new Set());
   validateCompleteOutline(outline);
   validateAlignedTopLevelMapping(outline.outline || [], groups);
   return outline;
@@ -561,7 +919,61 @@ async function alignedWorkflow(aiService, payload, log) {
   return second;
 }
 
-async function runOutlineGenerationTask({ aiService, workspaceStore, updateTask, payload }) {
+async function enhanceOutlineWithKnowledgeAdditions(aiService, payload, outline, knowledgeItems, log) {
+  if (!knowledgeItems.length) return outline;
+
+  const outlineNodeMap = createOutlineNodeMap(outline.outline || []);
+  const additionParents = collectKnowledgeAdditionParents(outline.outline || []);
+  if (!additionParents.length) {
+    log('当前目录没有可补充的二级目录，跳过参考知识库。', 98);
+    return outline;
+  }
+
+  const rawAttempts = [];
+  const normalizationStats = [];
+  const isDeveloperMode = Boolean(aiService.isDeveloperMode?.());
+  const devLog = (message) => {
+    if (isDeveloperMode) log(`[开发者] ${message}`, 98);
+  };
+  log(`开始根据 ${knowledgeItems.length} 条知识库条目补充缺失三级目录。`, 98);
+  devLog(`知识库补目录：可用二级父级 ${additionParents.length} 个，参考知识条目 ${knowledgeItems.length} 条。`);
+  const patch = await collectJson(aiService, {
+    messages: generateKnowledgeAdditionMessages({ ...payload, outline, knowledgeItems }),
+    temperature: 0.3,
+    normalizer: (value) => normalizeKnowledgeAdditionsResponse(value, {
+      outline: outline.outline || [],
+      outlineNodeMap,
+      rawAttempts,
+      normalizationStats,
+      debugLog: devLog,
+    }),
+    validator: validateKnowledgeAdditionsResponse,
+    repairMessagesBuilder: (context) => generateKnowledgeAdditionRepairMessages(context, additionParents),
+    progressCallback: (message) => log(message, 98),
+    progressLabel: '知识库补目录',
+    failureMessage: '模型返回的知识库补目录格式无效',
+  });
+
+  if (rawAttempts.length) {
+    devLog(`模型原始返回尝试 ${rawAttempts.length} 次：${rawAttempts.map((item, index) => `#${index + 1} ${formatAdditionSummary(item)}`).join('；')}`);
+  }
+  const lastStats = normalizationStats[normalizationStats.length - 1] || { retained: patch.additions.length, dropped: 0, adjustedParent: 0 };
+  devLog(`程序归一：保留 ${lastStats.retained} 条，删除 ${lastStats.dropped} 条，自动改 parent ${lastStats.adjustedParent} 条。`);
+  if (rawAttempts.length > 1) {
+    devLog(`修复后：保留 ${lastStats.retained} 条。`);
+  }
+  const enhanced = applyKnowledgeAdditions(outline, patch);
+  const additionCount = patch.additions.length;
+  devLog(`最终应用：新增三级目录 ${additionCount} 个。`);
+  if (!additionCount) {
+    log('知识库未返回可补充三级目录，保留原目录。', 99);
+  } else {
+    log(`知识库补目录已应用：新增三级目录 ${additionCount} 个。`, 99);
+  }
+  return enhanced;
+}
+
+async function runOutlineGenerationTask({ aiService, workspaceStore, knowledgeBaseService, updateTask, payload }) {
   let logs = ['开始生成目录。'];
   let currentProgress = 5;
   function log(message, progress = currentProgress) {
@@ -571,13 +983,25 @@ async function runOutlineGenerationTask({ aiService, workspaceStore, updateTask,
     updateTask({ status: 'running', progress: currentProgress, logs }, technicalPlan);
   }
 
-  let technicalPlan = workspaceStore.updateTechnicalPlan({ outlineMode: payload.mode, outlineGenerationTask: updateTask({ status: 'running', progress: 5, logs }) });
+  const referenceKnowledgeDocumentIds = normalizeReferenceDocumentIds(payload);
+  let technicalPlan = workspaceStore.updateTechnicalPlan({
+    outlineMode: payload.mode,
+    referenceKnowledgeDocumentIds,
+    outlineGenerationTask: updateTask({ status: 'running', progress: 5, logs }),
+  });
   updateTask({ status: 'running', progress: 5, logs }, technicalPlan);
-  const outline = payload.mode === 'aligned' ? await alignedWorkflow(aiService, payload, log) : await freeWorkflow(aiService, payload, log);
+  const taskPayload = {
+    ...payload,
+    reference_knowledge_document_ids: referenceKnowledgeDocumentIds,
+  };
+  let outline = taskPayload.mode === 'aligned' ? await alignedWorkflow(aiService, taskPayload, log) : await freeWorkflow(aiService, taskPayload, log);
+  const knowledgeItems = loadOutlineKnowledgeItems(knowledgeBaseService, referenceKnowledgeDocumentIds, log);
+  outline = await enhanceOutlineWithKnowledgeAdditions(aiService, taskPayload, outline, knowledgeItems, log);
   technicalPlan = workspaceStore.updateTechnicalPlan({
     outlineData: { ...outline, project_overview: payload.overview },
     contentGenerationTask: undefined,
     contentGenerationSections: {},
+    contentGenerationPlans: {},
     outlineGenerationTask: updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }),
   });
   updateTask({ status: 'success', progress: 100, logs: [...logs, '目录生成完成。'] }, technicalPlan);

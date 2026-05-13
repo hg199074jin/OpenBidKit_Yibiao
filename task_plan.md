@@ -17,6 +17,7 @@
 ## Errors Encountered
 | Error | Attempt | Resolution |
 | --- | --- | --- |
+
 | `technicalPlanStorage.load()` 返回值包含 `undefined` 导致 TypeScript 构建失败 | 第一次 `npm run build` | 将返回值归一为 `state || null` |
 
 ## Current Task: 技术方案缓存迁移
@@ -480,3 +481,117 @@
 ### Errors Encountered
 | Error | Attempt | Resolution |
 | --- | --- | --- |
+
+## Current Task: Step03 目录生成知识库选择 UI
+
+### Goal
+将 Step03 目录生成改为弹窗式配置：在弹窗内选择生成方式和本次参考知识库文档；页面原有生成方式切换去掉。本轮只做页面和前端状态，不改目录生成后台逻辑。
+
+### Phases
+- [completed] 1. 梳理现有 Step03 UI、目录生成参数、知识库列表类型和弹窗样式。
+- [completed] 2. 扩展技术方案前端状态，保存本次参考知识库文档 ID。
+- [completed] 3. 改造 `OutlineEditPage`：生成按钮打开配置弹窗，弹窗内选择生成方式和知识库文档。
+- [completed] 4. 补充样式，移除页面原生成方式切换。
+- [completed] 5. 运行构建验证并记录结果。
+
+### Decisions
+- 不新增 Step，知识库选择放在 Step03 目录生成弹窗内。
+- 只允许选择处理完成的知识库文档，未完成/失败文档显示但禁用。
+- 本轮不把知识库文档传给后台目录生成任务，避免提前改动目录生成逻辑。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step03 目录生成应用知识库
+
+### Goal
+完整接入 Step03 目录生成参考知识库：用户选择知识库文档后，目录生成仅在二三级目录阶段读取并参考选中文档的轻量知识条目，目录节点只保存 `knowledge_item_ids`，引用 ID 使用 `document_id::item_id` 避免跨文件冲突。
+
+### Phases
+- [completed] 1. 扩展前端类型和启动 payload，传递并保存参考知识库文档 ID。
+- [completed] 2. 为 Main 侧任务服务注入知识库服务，并新增知识库只读引用方法。
+- [completed] 3. 扩展目录生成任务：读取轻量知识条目、关键词筛选、prompt 注入、normalizer 保留合法 `knowledge_item_ids`。
+- [completed] 4. 保证自由生成和评分项对齐都只在二三级目录阶段使用知识库，一级目录不参考。
+- [completed] 5. 运行语法检查、构建和关键 smoke test。
+
+### Decisions
+- 只读取知识条目的 `id/title/resume`，不读取正文内容。
+- 目录 JSON 只新增 `knowledge_item_ids`，不增加 `knowledge_usage_hint`。
+- 跨文档引用统一使用 `document_id::item_id`。
+- 无可用知识条目时，目录生成按普通流程继续执行。
+- AI 返回不存在的 `knowledge_item_ids` 时过滤掉，不让引用字段影响目录生成主流程。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| `node -e` smoke test 因 PowerShell 字符串转义导致 `SyntaxError: Unexpected end of input` | 第一次目录知识引用 smoke test | 改用不含 JSON 字符串比较的断言写法重跑 |
+| 第二次 smoke test 中非法 `bad-id` 未被过滤 | 第二次目录知识引用 smoke test | 定位为 fake AI 未执行 `request.normalizer`；同时在目录合并阶段增加全局知识 ID 过滤作为双重保护 |
+| 自由模式知识库边界 smoke test 触发 `完整目录至少需要三级结构` | 第一次自由模式 smoke test | fake AI 只返回二级目录，补充三级节点后重跑 |
+
+## Current Task: Step03 知识库目录 Patch 增强
+
+### Goal
+将 Step03 知识库应用方式改为：先完全按原目录生成逻辑生成完整目录，不参考知识库；再把完整目录和选中知识库轻量条目交给 AI，让 AI 只返回二三级目录补充 Patch（bindings/additions），程序应用补丁并全局去重 `knowledge_item_ids`。
+
+### Phases
+- [completed] 1. 移除二三级目录分批 prompt 注入知识库逻辑，恢复原目录生成路径。
+- [completed] 2. 新增知识库 Patch prompt、normalizer、validator 和补丁应用逻辑。
+- [completed] 3. 将 Patch 增强接入自由生成和评分项对齐模式的完整目录生成之后。
+- [completed] 4. 验证 Patch 只影响二三级目录、AI 不返回完整目录、知识 ID 全局最多保留一次。
+- [completed] 5. 运行语法检查、构建、smoke test 和空白检查。
+
+### Decisions
+- AI Patch 只允许返回 `bindings` 和 `additions`，不允许返回完整 `outline`。
+- 一级目录不可新增、不可修改、不可删除。
+- 优先绑定已有二三级目录，只有现有目录无法承载时才新增二级或三级目录。
+- 同一个 `knowledge_item_id` 在整份目录中最多保留一次。
+- 新增目录由程序统一重编号，AI 不负责编号。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| PowerShell 长 `node -e` smoke test 中双引号被吞导致 `SyntaxError: Unexpected token '.'` | 第一次 Patch 流程 smoke test | 改用临时 `.cjs` 文件运行 smoke test，执行后删除临时文件 |
+
+## Current Task: Step03 知识库 Patch 校验修复增强
+
+### Goal
+修复知识库目录 Patch 中模型照抄 `document_id::K000001` 占位 ID、将新增节点挂到三级目录导致全部过滤的问题；强化提示词，提供真实白名单，并让非法 Patch 进入 JSON 修复流程，同时在开发者模式下输出校验与应用日志。
+
+### Phases
+- [completed] 1. 强化 Patch prompt：移除占位示例，加入真实知识库 ID 示例、可绑定目录 ID、可新增父级 ID 和可用知识库 ID 白名单。
+- [completed] 2. 增加严格 Patch 校验：非法知识 ID、短 ID、一级绑定、三级 parent、重复知识 ID、返回完整 outline 等都抛错。
+- [completed] 3. 接入修复流程：严格校验错误交给 `collectJsonResponse` 的 JSON 修复链路处理。
+- [completed] 4. 开发者模式增加任务日志：输出白名单规模、校验失败原因、原始尝试摘要、校验通过统计和应用统计。
+- [completed] 5. 运行修复 smoke test、CJS 语法检查、`npm run build` 和 `git diff --check`。
+
+### Decisions
+- Patch normalizer 不再静默过滤非法模型输出，避免“任务成功但知识库没有生效”。
+- 最终应用层仍保留过滤和全局去重，防止脏数据落盘。
+- 三级目录不能作为 `additions.parent_id`；如果模型想补充三级目录，应绑定该三级目录或挂到其父级二级目录。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+
+## Current Task: Step03 知识库 additions-only 补三级目录
+
+### Goal
+将 Step03 完整目录后的知识库增强从 `bindings/additions + knowledge_item_ids` 改为 additions-only：知识库只作为参考材料，AI 只输出缺失三级目录，程序把新增目录追加到现有二级目录下并统一编号，不再写入任何 `knowledge_item_ids`。
+
+### Phases
+- [completed] 1. 核对旧 Patch 逻辑、修复链路和知识库轻量引用契约。
+- [completed] 2. 替换 prompt、normalizer、validator 和应用逻辑为 additions-only。
+- [completed] 3. 增加 smoke test 或等效验证，覆盖旧 bindings-only/多余字段/三级 parent 自动上提。
+- [completed] 4. 运行 CJS 语法检查、客户端构建和 diff 检查。
+- [completed] 5. 更新计划、发现和进度记录。
+
+### Decisions
+- 主目录生成仍不参考知识库；知识库增强只在完整目录生成和审核之后执行。
+- AI 不再看到或返回知识库 ID，正文生成阶段再重新编排目录与知识条目关联。
+- `parent_id` 只允许最终指向现有二级目录；如果模型误填三级目录，程序自动上提到其父级二级目录。
+
+### Errors Encountered
+| Error | Attempt | Resolution |
+| --- | --- | --- |
+| additions-only smoke test 中完整目录 fake AI 返回旧编号，导致补目录阶段找不到 `1.1` | 第一次 smoke test | 将 fake 完整目录 ID 改为真实 `1`、`1.1`、`1.1.1` 后重跑通过 |

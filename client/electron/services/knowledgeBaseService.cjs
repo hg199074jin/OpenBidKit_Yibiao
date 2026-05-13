@@ -1260,6 +1260,48 @@ function createKnowledgeBaseService({ app, aiService, configStore }) {
       return { success: true, message: '已开始分批匹配段落', document };
     },
 
+    getOutlineReferences(documentIds) {
+      const ids = Array.isArray(documentIds) ? documentIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
+      if (!ids.length) {
+        return { items: [] };
+      }
+
+      const index = loadIndex();
+      const seen = new Set();
+      const items = [];
+      ids.forEach((documentId) => {
+        const document = index.documents.find((item) => item.id === documentId);
+        if (!document || document.status !== 'success') {
+          return;
+        }
+
+        let documentItems = [];
+        try {
+          documentItems = readJson(fromRelative(baseDir, document.items_path), []);
+        } catch (error) {
+          console.warn('[knowledge-base] 读取知识库目录引用失败', { documentId, message: error.message || String(error) });
+          return;
+        }
+
+        (Array.isArray(documentItems) ? documentItems : []).forEach((item) => {
+          const itemId = String(item?.id || '').trim();
+          const title = String(item?.title || '').trim();
+          const resume = String(item?.resume || item?.summary || '').trim();
+          if (!itemId || !title || !resume) {
+            return;
+          }
+          const referenceId = `${document.id}::${itemId}`;
+          if (seen.has(referenceId)) {
+            return;
+          }
+          seen.add(referenceId);
+          items.push({ id: referenceId, title, resume });
+        });
+      });
+
+      return { items };
+    },
+
     readMarkdown(documentId) {
       const document = getDocument(documentId);
       const filePath = fromRelative(baseDir, document.markdown_path);

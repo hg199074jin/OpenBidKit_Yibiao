@@ -34,7 +34,8 @@ const resetState = {
   bidAnalysisMode: 'key' as const,
   bidAnalysisTasks: {},
   bidAnalysisProgress: 0,
-  outlineMode: 'free' as const,
+  outlineMode: 'aligned' as const,
+  referenceKnowledgeDocumentIds: [] as string[],
   bidAnalysisTask: undefined,
   outlineGenerationTask: undefined,
   contentGenerationTask: undefined,
@@ -424,7 +425,8 @@ function TechnicalPlanHome() {
             techRequirements: '',
             bidAnalysisTasks: {},
             bidAnalysisProgress: 0,
-            outlineMode: 'free',
+            outlineMode: 'aligned',
+            referenceKnowledgeDocumentIds: [],
             bidAnalysisTask: undefined,
             outlineGenerationTask: undefined,
             contentGenerationTask: undefined,
@@ -457,9 +459,11 @@ function TechnicalPlanHome() {
           projectOverview={state.projectOverview}
           techRequirements={state.techRequirements}
           outlineMode={state.outlineMode}
+          referenceKnowledgeDocumentIds={state.referenceKnowledgeDocumentIds}
           outlineData={state.outlineData}
           task={state.outlineGenerationTask}
           onOutlineModeChange={(outlineMode) => setState((prev) => ({ ...prev, outlineMode }))}
+          onReferenceKnowledgeDocumentsChange={(referenceKnowledgeDocumentIds) => setState((prev) => ({ ...prev, referenceKnowledgeDocumentIds }))}
           onOutlineGenerated={(outlineData) => setState((prev) => ({
             ...prev,
             outlineData: resetGeneratedContent(outlineData),

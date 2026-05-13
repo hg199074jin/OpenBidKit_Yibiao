@@ -1,18 +1,29 @@
+import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useToast } from '../../../shared/ui';
 import type { BackgroundTaskState } from '../types';
+import type { KnowledgeBaseIndex, KnowledgeDocument } from '../../knowledge-base/types';
 import type { OutlineData, OutlineItem, OutlineMode } from '../../../shared/types';
 
 interface OutlineEditPageProps {
   projectOverview: string;
   techRequirements: string;
   outlineMode: OutlineMode;
+  referenceKnowledgeDocumentIds: string[];
   outlineData: OutlineData | null;
   task?: BackgroundTaskState;
   onOutlineModeChange: (mode: OutlineMode) => void;
+  onReferenceKnowledgeDocumentsChange: (documentIds: string[]) => void;
   onOutlineGenerated: (outlineData: OutlineData) => void;
 }
+
+const emptyKnowledgeIndex: KnowledgeBaseIndex = { folders: [], documents: [] };
+
+const outlineModeLabels: Record<OutlineMode, string> = {
+  free: '自由生成',
+  aligned: '按评分项对齐',
+};
 
 function collectOutlineIds(items: OutlineItem[], ids = new Set<string>()) {
   items.forEach((item) => {
@@ -85,13 +96,26 @@ function findOutlineItem(items: OutlineItem[], itemId: string): OutlineItem | nu
   return null;
 }
 
+function getInitialExpandedKnowledgeFolders(index: KnowledgeBaseIndex) {
+  const firstAvailableFolder = index.folders.find((folder) => (
+    index.documents.some((document) => document.folder_id === folder.id && document.status === 'success')
+  ));
+  return new Set(firstAvailableFolder ? [firstAvailableFolder.id] : []);
+}
+
+function includesKeyword(value: string, keyword: string) {
+  return value.toLowerCase().includes(keyword);
+}
+
 function OutlineEditPage({
   projectOverview,
   techRequirements,
   outlineMode,
+  referenceKnowledgeDocumentIds,
   outlineData,
   task,
   onOutlineModeChange,
+  onReferenceKnowledgeDocumentsChange,
   onOutlineGenerated,
 }: OutlineEditPageProps) {
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
@@ -101,6 +125,13 @@ function OutlineEditPage({
   const [editDescription, setEditDescription] = useState('');
   const [startingOutline, setStartingOutline] = useState(false);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
+  const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
+  const [draftOutlineMode, setDraftOutlineMode] = useState<OutlineMode>(outlineMode);
+  const [draftKnowledgeDocumentIds, setDraftKnowledgeDocumentIds] = useState<string[]>(referenceKnowledgeDocumentIds);
+  const [knowledgeSearch, setKnowledgeSearch] = useState('');
+  const [expandedKnowledgeFolderIds, setExpandedKnowledgeFolderIds] = useState<Set<string>>(new Set());
+  const [knowledgeIndex, setKnowledgeIndex] = useState<KnowledgeBaseIndex>(emptyKnowledgeIndex);
+  const [loadingKnowledge, setLoadingKnowledge] = useState(false);
   const [localStartAt, setLocalStartAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const logListRef = useRef<HTMLDivElement | null>(null);
@@ -166,6 +197,51 @@ function OutlineEditPage({
     }
   }, [progressLogs.length]);
 
+  useEffect(() => {
+    if (!generationDialogOpen) {
+      return;
+    }
+
+    setDraftOutlineMode(outlineMode);
+    setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
+    setKnowledgeSearch('');
+    void loadKnowledgeIndex();
+  }, [generationDialogOpen, outlineMode, referenceKnowledgeDocumentIds]);
+
+  const loadKnowledgeIndex = async () => {
+    try {
+      setLoadingKnowledge(true);
+      const data = await window.yibiao?.knowledgeBase.list();
+      setKnowledgeIndex(data || emptyKnowledgeIndex);
+      setExpandedKnowledgeFolderIds(getInitialExpandedKnowledgeFolders(data || emptyKnowledgeIndex));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '读取知识库失败', 'error');
+      setKnowledgeIndex(emptyKnowledgeIndex);
+      setExpandedKnowledgeFolderIds(new Set());
+    } finally {
+      setLoadingKnowledge(false);
+    }
+  };
+
+  const openGenerationDialog = () => {
+    if (!projectOverview || !techRequirements) {
+      showToast('请先完成招标文件解析', 'info');
+      return;
+    }
+
+    setDraftOutlineMode(outlineMode);
+    setDraftKnowledgeDocumentIds(referenceKnowledgeDocumentIds);
+    setKnowledgeSearch('');
+    setGenerationDialogOpen(true);
+  };
+
+  const saveOutlineConfig = () => {
+    onOutlineModeChange(draftOutlineMode);
+    onReferenceKnowledgeDocumentsChange(draftKnowledgeDocumentIds);
+    setGenerationDialogOpen(false);
+    showToast('目录生成配置已保存', 'success');
+  };
+
   const generateOutline = async () => {
     if (!projectOverview || !techRequirements) {
       showToast('请先完成招标文件解析', 'info');
@@ -177,10 +253,14 @@ function OutlineEditPage({
       setStartingOutline(true);
       setLocalStartAt(startedNow);
       setNowTick(startedNow);
+      onOutlineModeChange(draftOutlineMode);
+      onReferenceKnowledgeDocumentsChange(draftKnowledgeDocumentIds);
+      setGenerationDialogOpen(false);
       await window.yibiao?.tasks.startOutlineGeneration({
         overview: projectOverview,
         requirements: techRequirements,
-        mode: outlineMode,
+        mode: draftOutlineMode,
+        reference_knowledge_document_ids: draftKnowledgeDocumentIds,
       });
       showToast('目录生成任务已在后台启动', 'success');
     } catch (error) {
@@ -188,6 +268,48 @@ function OutlineEditPage({
       setLocalStartAt(null);
       showToast(error instanceof Error ? error.message : '启动目录生成任务失败', 'error');
     }
+  };
+
+  const toggleDraftKnowledgeDocument = (document: KnowledgeDocument) => {
+    if (document.status !== 'success' || generating) {
+      return;
+    }
+
+    setDraftKnowledgeDocumentIds((prev) => (
+      prev.includes(document.id)
+        ? prev.filter((id) => id !== document.id)
+        : [...prev, document.id]
+    ));
+  };
+
+  const toggleKnowledgeFolder = (folderId: string) => {
+    setExpandedKnowledgeFolderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) {
+        next.delete(folderId);
+      } else {
+        next.add(folderId);
+      }
+      return next;
+    });
+  };
+
+  const selectFolderDocuments = (documents: KnowledgeDocument[]) => {
+    const ids = documents.filter((document) => document.status === 'success').map((document) => document.id);
+    setDraftKnowledgeDocumentIds((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
+  };
+
+  const clearFolderDocuments = (documents: KnowledgeDocument[]) => {
+    const ids = new Set(documents.map((document) => document.id));
+    setDraftKnowledgeDocumentIds((prev) => prev.filter((id) => !ids.has(id)));
+  };
+
+  const removeDraftKnowledgeDocument = (documentId: string) => {
+    setDraftKnowledgeDocumentIds((prev) => prev.filter((id) => id !== documentId));
+  };
+
+  const clearDraftKnowledgeDocuments = () => {
+    setDraftKnowledgeDocumentIds([]);
   };
 
   const updateOutline = (outline: OutlineItem[]) => {
@@ -289,13 +411,6 @@ function OutlineEditPage({
     setExpandedItems(new Set());
   };
 
-  const handleModeChange = (mode: OutlineMode) => {
-    if (generating || outlineMode === mode) {
-      return;
-    }
-    onOutlineModeChange(mode);
-  };
-
   const renderItem = (item: OutlineItem, level = 0) => {
     const hasChildren = Boolean(item.children?.length);
     const isExpanded = expandedItems.has(item.id);
@@ -328,21 +443,136 @@ function OutlineEditPage({
     );
   };
 
+  const renderKnowledgePicker = () => {
+    if (loadingKnowledge) {
+      return <div className="outline-knowledge-empty">正在读取知识库...</div>;
+    }
+
+    const keyword = knowledgeSearch.trim().toLowerCase();
+    const availableDocuments = knowledgeIndex.documents.filter((document) => document.status === 'success');
+    const selectedDocuments = draftKnowledgeDocumentIds
+      .map((documentId) => knowledgeIndex.documents.find((document) => document.id === documentId))
+      .filter((document): document is KnowledgeDocument => Boolean(document));
+    const visibleFolders = knowledgeIndex.folders.flatMap((folder) => {
+      const folderDocuments = availableDocuments.filter((document) => document.folder_id === folder.id);
+      const folderMatched = keyword ? includesKeyword(folder.name, keyword) : false;
+      const documents = keyword
+        ? folderDocuments.filter((document) => folderMatched || includesKeyword(document.file_name, keyword))
+        : folderDocuments;
+
+      return documents.length ? [{ folder, documents }] : [];
+    });
+
+    if (!availableDocuments.length) {
+      return <div className="outline-knowledge-empty">暂无已完成的知识库文档，可先到知识库上传并处理完成后再选择。</div>;
+    }
+
+    return (
+      <div className="outline-knowledge-compact">
+        <input
+          className="outline-knowledge-search"
+          value={knowledgeSearch}
+          onChange={(event) => setKnowledgeSearch(event.target.value)}
+          placeholder="搜索文件夹或文档"
+        />
+        <div className="outline-knowledge-grid">
+          <div className="outline-knowledge-browser">
+            <div className="outline-knowledge-pane-head">
+              <strong>知识库</strong>
+              <span>{availableDocuments.length} 个可用</span>
+            </div>
+            <div className="outline-knowledge-folder-list compact">
+              {visibleFolders.length ? visibleFolders.map(({ folder, documents }) => {
+                const expanded = keyword ? true : expandedKnowledgeFolderIds.has(folder.id);
+                const selectedCount = documents.filter((document) => draftKnowledgeDocumentIds.includes(document.id)).length;
+
+                return (
+                  <section className="outline-knowledge-folder compact" key={folder.id}>
+                    <div className="outline-knowledge-folder-head compact">
+                      <button type="button" onClick={() => toggleKnowledgeFolder(folder.id)} disabled={Boolean(keyword)}>
+                        <span>{expanded ? '▾' : '▸'}</span>
+                        <strong>{folder.name}</strong>
+                      </button>
+                      <small>{documents.length} 个 / 已选 {selectedCount}</small>
+                      <div className="outline-knowledge-folder-actions">
+                        <button type="button" onClick={() => selectFolderDocuments(documents)} disabled={generating}>全选</button>
+                        <button type="button" onClick={() => clearFolderDocuments(documents)} disabled={generating || !selectedCount}>取消</button>
+                      </div>
+                    </div>
+                    {expanded && (
+                      <div className="outline-knowledge-document-list compact">
+                        {documents.map((document) => {
+                          const selected = draftKnowledgeDocumentIds.includes(document.id);
+
+                          return (
+                            <label className={`outline-knowledge-document compact${selected ? ' is-selected' : ''}`} key={document.id}>
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                disabled={generating}
+                                onChange={() => toggleDraftKnowledgeDocument(document)}
+                              />
+                              <strong title={document.file_name}>{document.file_name}</strong>
+                              <small>{document.item_count || 0} 条</small>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+                );
+              }) : <div className="outline-knowledge-empty compact">没有匹配的知识库文档</div>}
+            </div>
+          </div>
+          <aside className="outline-knowledge-selected-pane">
+            <div className="outline-knowledge-pane-head">
+              <strong>本次已选</strong>
+              <button type="button" onClick={clearDraftKnowledgeDocuments} disabled={generating || !draftKnowledgeDocumentIds.length}>清空</button>
+            </div>
+            {selectedDocuments.length ? (
+              <div className="outline-knowledge-selected-list">
+                {selectedDocuments.map((document) => (
+                  <div className="outline-knowledge-selected-item" key={document.id}>
+                    <strong title={document.file_name}>{document.file_name}</strong>
+                    <button type="button" onClick={() => removeDraftKnowledgeDocument(document.id)} disabled={generating}>移除</button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="outline-knowledge-empty compact">未选择知识库文档</div>
+            )}
+          </aside>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="plan-step-body outline-generation-page">
       <section className="outline-command-bar">
         <div>
           <span className="section-kicker">STEP 03</span>
           <strong>目录生成</strong>
-          <p>复用旧版目录生成逻辑，生成后可直接调整章节标题、描述和层级。</p>
+          <p>生成前选择目录方式和参考知识库；当前参考知识库：{referenceKnowledgeDocumentIds.length ? `已选择 ${referenceKnowledgeDocumentIds.length} 个文档` : '未选择'}。</p>
         </div>
-        <div className="outline-mode-switch" role="radiogroup" aria-label="目录模式">
-          <button type="button" className={outlineMode === 'free' ? 'is-active' : ''} onClick={() => handleModeChange('free')} disabled={generating}>自由生成</button>
-          <button type="button" className={outlineMode === 'aligned' ? 'is-active' : ''} onClick={() => handleModeChange('aligned')} disabled={generating}>按评分项对齐</button>
+        <div className="outline-command-actions">
+          <button
+            type="button"
+            className="outline-config-action"
+            onClick={openGenerationDialog}
+            disabled={generating || !projectOverview || !techRequirements}
+            aria-label="打开目录生成配置"
+            title="目录生成配置"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V21a2 2 0 0 1-4 0v-.08a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.05.05a2 2 0 0 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.04H3a2 2 0 0 1 0-4h.08A1.7 1.7 0 0 0 4.6 8.93a1.7 1.7 0 0 0-.34-1.87l-.05-.05a2 2 0 0 1 2.83-2.83l.05.05a1.7 1.7 0 0 0 1.87.34A1.7 1.7 0 0 0 10 3.01V3a2 2 0 0 1 4 0v.08a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.05-.05a2 2 0 0 1 2.83 2.83l-.05.05a1.7 1.7 0 0 0-.34 1.87 1.7 1.7 0 0 0 1.56 1.04H21a2 2 0 0 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z" />
+            </svg>
+          </button>
+          <button type="button" className="primary-action" onClick={openGenerationDialog} disabled={generating || !projectOverview || !techRequirements}>
+            {generating ? 'AI 正在生成目录' : outlineData ? '重新生成目录' : '生成目录'}
+          </button>
         </div>
-        <button type="button" className="primary-action" onClick={generateOutline} disabled={generating || !projectOverview || !techRequirements}>
-          {generating ? 'AI 正在生成目录' : outlineData ? '重新生成目录' : '生成目录'}
-        </button>
       </section>
 
       <section className="outline-generation-workspace">
@@ -458,6 +688,61 @@ function OutlineEditPage({
           )}
         </aside>
       </section>
+
+      <Dialog.Root open={generationDialogOpen} onOpenChange={setGenerationDialogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="content-regenerate-modal" />
+          <Dialog.Content className="outline-generation-config-card">
+            <Dialog.Title className="sr-only">{outlineData ? '重新生成目录' : '生成目录'}</Dialog.Title>
+            <Dialog.Description className="sr-only">选择本次目录生成方式和参考知识库。</Dialog.Description>
+
+            <section className="outline-generation-config-section">
+              <div className="outline-generation-config-head">
+                <strong>生成方式</strong>
+                <span>{outlineModeLabels[draftOutlineMode]}</span>
+              </div>
+              <div className="outline-generation-mode-list" role="radiogroup" aria-label="目录生成方式">
+                <button
+                  type="button"
+                  className={`outline-generation-mode-card${draftOutlineMode === 'free' ? ' is-active' : ''}`}
+                  onClick={() => setDraftOutlineMode('free')}
+                  disabled={generating}
+                >
+                  <strong>自由生成</strong>
+                  <span>完全由 AI 分析并生成目录，标题贴近技术评分项语义，但不完全一致。</span>
+                </button>
+                <button
+                  type="button"
+                  className={`outline-generation-mode-card${draftOutlineMode === 'aligned' ? ' is-active' : ''}`}
+                  onClick={() => setDraftOutlineMode('aligned')}
+                  disabled={generating}
+                >
+                  <strong>按评分项对齐</strong>
+                  <span>一级目录完全和技术评分项要求一致，二三级目录由 AI 生成。</span>
+                </button>
+              </div>
+            </section>
+
+            <section className="outline-generation-config-section outline-knowledge-picker">
+              <div className="outline-generation-config-head">
+                <strong>参考知识库</strong>
+                <span>已选择 {draftKnowledgeDocumentIds.length} 个文档</span>
+              </div>
+              {renderKnowledgePicker()}
+            </section>
+
+            <div className="content-regenerate-actions">
+              <Dialog.Close className="secondary-action" type="button">取消</Dialog.Close>
+              <button type="button" className="secondary-action" onClick={saveOutlineConfig} disabled={generating}>
+                保存配置
+              </button>
+              <button type="button" className="primary-action" onClick={generateOutline} disabled={generating || !projectOverview || !techRequirements}>
+                开始生成
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }

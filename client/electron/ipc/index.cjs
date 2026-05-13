@@ -22,7 +22,7 @@ function registerIpcHandlers({ app, mainWindow, triggerUpdateDownload, quitAndIn
   const exportService = createExportService();
   const knowledgeBaseService = createKnowledgeBaseService({ app, aiService, configStore });
   const workspaceStore = createWorkspaceStore(app);
-  const taskService = createTaskService({ aiService, workspaceStore });
+  const taskService = createTaskService({ aiService, workspaceStore, knowledgeBaseService });
 
   registerConfigIpc({ configStore, aiService });
   registerAiIpc({ aiService });

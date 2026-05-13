@@ -63,3 +63,12 @@
 - 前端新增“分析调试”详情页：展示候选条目、有效/筛除 block、最终条目、覆盖率、补漏新增、舍弃记录，并允许输入每批条目数启动 `startMatching`。
 - 知识库 AI 请求已按缓存优化改为纯 `user` 多消息：全文 block 是第一条 user message，任务要求和当前批次变量放后续 user message；不再使用 system prompt，避免 system 内容破坏前缀缓存收益。
 - 开发者模式下知识库流程现在额外输出 JSONL 调试日志到 `logs/knowledge-base/<documentId>.jsonl`，用于定位“卡住”发生在 AI 调用前、AI 调用后、normalizer/validator、状态更新还是保存阶段。
+- Step03 当前页面顶部直接渲染 `outline-mode-switch`，`generateOutline()` 直接用 `outlineMode` 启动后台任务；知识库列表可直接通过 `window.yibiao.knowledgeBase.list()` 获取 `folders/documents`，其中 `KnowledgeDocument.status === 'success'` 可作为可选条件。
+- 本轮 Step03 改造只需 Renderer UI 和技术方案状态扩展：目录生成后台 `startOutlineGeneration({ overview, requirements, mode })` 保持不变，参考知识库文档 ID 只先保存到前端状态。
+- 目录生成应用知识库的关键冲突：知识库单文档内条目 ID 为 `K000001` 递增，多文档之间会重复；目录节点的 `knowledge_item_ids` 必须保存为 `document_id::item_id` 才能在后续正文生成阶段唯一定位。
+- 当前 Main 目录生成实际链路在 `client/electron/services/outlineGenerationTask.cjs`，且已使用 `collectJsonResponse` 做修复/重试；需要直接改该文件，而不是旧 Renderer `outlineWorkflow.ts`。
+- 旧 Step03 知识库接入仍会在 `generateChildrenMessages()` / `generateAlignedChildrenMessages()` 注入按一级目录筛选的知识条目，且自由模式检测到知识库后强制走 fallback；这会导致同一知识条目跨一级目录重复引用，必须由后置全局 Patch 替代。
+- Step03 Patch 模式已改为完整目录后置增强：主目录 normalizer 使用空知识 ID 集合清掉模型误返回的 `knowledge_item_ids`；Patch prompt 使用纯 `user` 多消息，normalizer 拒绝完整 `outline`，只接受二三级 bindings 和一级/二级 parent additions；应用后再统一重编号并全局去重。
+- Step03 Patch 未落盘 `knowledge_item_ids` 的根因已确认：模型照抄 prompt 示例中的 `document_id::K000001` 占位 ID，而真实 ID 是 `doc-00665a28-...::K000001`；同时模型把部分 additions 挂到三级目录，违反“不能新增四级目录”的规则。新实现通过真实白名单提示和严格校验修复该类问题。
+- Step03 旧 Patch 仍把任务建模成“绑定知识库 ID + 可新增二/三级目录”，会把弱模型注意力拉向 `bindings` 和 `knowledge_item_ids`，与当前目标“只补缺失三级目录”冲突。新方案应完全不向模型暴露知识 ID，只把知识条目的标题/摘要作为参考文本。
+- additions-only 后，Step03 知识库增强的可靠边界更清晰：AI 只决定“某个现有二级目录下是否缺一个三级目录”，程序负责编号、去重、删除多余字段和防止知识 ID 落盘；如果模型返回 bindings-only 或完整 outline，normalizer 会触发专用修复 prompt，而不是静默写入无效绑定。

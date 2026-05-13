@@ -105,6 +105,7 @@ export interface TechnicalPlanState {
   bidAnalysisTasks: BidAnalysisTasks;
   bidAnalysisProgress: number;
   outlineMode: OutlineMode;
+  referenceKnowledgeDocumentIds: string[];
   bidAnalysisTask?: BackgroundTaskState;
   outlineGenerationTask?: BackgroundTaskState;
   contentGenerationTask?: BackgroundTaskState;
