@@ -199,7 +199,9 @@ function BidAnalysisPage({
 
     try {
       setRunning(true);
-      await window.yibiao?.tasks.startBidAnalysis({ mode, fileContent });
+      const config = await window.yibiao?.config.load();
+      const shouldRealTimeRender = config?.real_time_render === true;
+      await window.yibiao?.tasks.startBidAnalysis({ mode, fileContent, real_time_render: shouldRealTimeRender });
       showToast('招标文件解析任务已在后台启动', 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '启动解析任务失败', 'error');
