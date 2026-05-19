@@ -1,6 +1,7 @@
 const NOTICE_ENDPOINT = 'https://analytics.agnet.top/notice';
 const PROJECT_NAME = 'yibiao-client';
 const DISMISSED_NOTICE_ID_KEY = 'remote_notice_dismissed_id';
+const LOG_PREFIX = '[remote-notice]';
 
 export interface RemoteNotice {
   id: string;
@@ -67,13 +68,18 @@ export async function fetchRemoteNotice() {
   });
 
   if (!response.ok) {
+    console.info(LOG_PREFIX, 'request failed', response.status);
     return null;
   }
 
   const data = await response.json().catch(() => null) as RemoteNoticeResponse | null;
+  console.info(LOG_PREFIX, 'response', data);
   if (!data || data.code !== 0) {
+    console.info(LOG_PREFIX, 'invalid response', data?.code);
     return null;
   }
 
-  return normalizeNotice(data.notice);
+  const notice = normalizeNotice(data.notice);
+  console.info(LOG_PREFIX, 'normalized notice', notice?.id || null);
+  return notice;
 }

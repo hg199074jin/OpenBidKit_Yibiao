@@ -660,7 +660,7 @@
       }
 
       const enabledText = notice.enabled === false ? '停用' : '启用';
-      state.noticeMeta.textContent = `公告 ID：${notice.id || '-'}\n状态：${enabledText}\n更新时间：${notice.updatedAt || '-'}\n项目：${notice.projectName || '-'}`;
+      state.noticeMeta.textContent = `公告 ID：${notice.id || '-'}\n状态：${enabledText}\n公告时间：${notice.updatedAt || '-'}\n项目：${notice.projectName || '-'}`;
     }
 
     function fillNoticeForm(notice) {

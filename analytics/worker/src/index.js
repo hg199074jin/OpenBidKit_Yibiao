@@ -101,11 +101,26 @@ function buildNoticeKey(projectName) {
 }
 
 function createNoticeId(now) {
-  const timestamp = now.replace(/[-:.TZ]/g, '').slice(0, 14);
+  const timestamp = now.replace(/[-: ]/g, '').slice(0, 14);
   const random = typeof globalThis.crypto?.randomUUID === 'function'
     ? globalThis.crypto.randomUUID().slice(0, 8)
     : Math.random().toString(36).slice(2, 10);
   return `notice-${timestamp}-${random}`;
+}
+
+function formatNoticeTime(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`;
 }
 
 function normalizeNoticeForResponse(notice) {
@@ -361,7 +376,7 @@ async function handleAdminSaveNotice(request, env) {
     return json({ code: 400, message: 'missing content' }, { status: 400 });
   }
 
-  const now = new Date().toISOString();
+  const now = formatNoticeTime();
   const notice = {
     id: createNoticeId(now),
     projectName,
