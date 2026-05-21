@@ -16,6 +16,6 @@ export const CONFIG_USAGE_FIELDS = [
   { key: 'tableRequirements', blob: 'blob15' },
   { key: 'useMermaidImages', blob: 'blob16' },
   { key: 'useAiImages', blob: 'blob17' },
-  { key: 'textModelNames', blob: 'blob18', event: 'ai_request', requestType: 'text' },
-  { key: 'imageModelNames', blob: 'blob19', event: 'ai_request', requestType: 'image' },
+  { key: 'textModelNames', blob: 'blob18', event: 'ai_request', requestType: 'text', normalizeLowercase: true },
+  { key: 'imageModelNames', blob: 'blob19', event: 'ai_request', requestType: 'image', normalizeLowercase: true },
 ];

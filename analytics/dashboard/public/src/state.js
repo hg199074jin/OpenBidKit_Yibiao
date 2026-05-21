@@ -25,6 +25,7 @@ export const state = {
   versionsTable: $('versionsTable'),
   retentionTable: $('retentionTable'),
   configUsage: $('configUsage'),
+  modelUsage: $('modelUsage'),
   latestTable: $('latestTable'),
   prevLatestPage: $('prevLatestPage'),
   nextLatestPage: $('nextLatestPage'),

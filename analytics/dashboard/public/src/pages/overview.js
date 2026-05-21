@@ -20,7 +20,7 @@ function normalizeDaily(rows, clientRows) {
     map.get(date).clients = Number(row.clients || 0);
   }
 
-  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+  return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date));
 }
 
 export async function loadOverview() {

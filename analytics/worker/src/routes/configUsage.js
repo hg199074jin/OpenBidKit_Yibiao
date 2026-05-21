@@ -6,10 +6,11 @@ import { isValidProjectName, logQueryError, normalizeText, safeDays, sqlString }
 function buildConfigUsageSql(project, days, field) {
   const event = field.event || 'config_usage';
   const requestTypeFilter = field.requestType ? `\n      AND blob20 = ${sqlString(field.requestType)}` : '';
+  const valueExpression = field.normalizeLowercase ? `lower(${field.blob})` : field.blob;
 
   return `
     SELECT
-      ${field.blob} AS value,
+      ${valueExpression} AS value,
       COUNT(DISTINCT blob7) AS clients,
       SUM(_sample_interval) AS events
     FROM ${DATASET}

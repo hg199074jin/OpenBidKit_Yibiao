@@ -1,5 +1,5 @@
 import { loadSettings, saveSettings } from './api.js';
-import { loadConfigUsage } from './pages/configUsage.js';
+import { loadConfigUsage, loadModelUsage } from './pages/configUsage.js';
 import { loadLatest } from './pages/latest.js';
 import { disableNotice, loadNotice, publishNotice } from './pages/notice.js';
 import { loadOverview } from './pages/overview.js';
@@ -12,6 +12,7 @@ const tabLoaders = {
   overview: () => loadOverview(),
   traffic: () => loadTraffic(),
   config: () => loadConfigUsage(),
+  models: () => loadModelUsage(),
   latest: (options = {}) => loadLatest(options),
   notice: () => loadNotice(),
 };

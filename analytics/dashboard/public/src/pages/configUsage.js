@@ -22,22 +22,25 @@ function labelConfigValue(groupKey, value) {
   return labels[groupKey]?.[value] || value || '-';
 }
 
-function renderConfigUsage(usage) {
-  const groups = [
-    ['fileParserProviders', '文件解析方式'],
-    ['realTimeRender', '实时渲染'],
-    ['imageProviders', '生图服务商'],
-    ['imageModelStatuses', '生图模型状态'],
-    ['textModelNames', '文本模型请求'],
-    ['imageModelNames', '生图模型请求'],
-    ['bidAnalysisModes', 'Step 02 解析模式'],
-    ['outlineModes', 'Step 03 目录模式'],
-    ['tableRequirements', '正文表格需求'],
-    ['useMermaidImages', 'Mermaid 图片'],
-    ['useAiImages', 'AI 生图'],
-  ];
+const configUsageGroups = [
+  ['fileParserProviders', '文件解析方式'],
+  ['realTimeRender', '实时渲染'],
+  ['imageProviders', '生图服务商'],
+  ['imageModelStatuses', '生图模型状态'],
+  ['bidAnalysisModes', 'Step 02 解析模式'],
+  ['outlineModes', 'Step 03 目录模式'],
+  ['tableRequirements', '正文表格需求'],
+  ['useMermaidImages', 'Mermaid 图片'],
+  ['useAiImages', 'AI 生图'],
+];
 
-  state.configUsage.innerHTML = `<div class="usage-grid">${groups.map(([key, label]) => {
+const modelUsageGroups = [
+  ['textModelNames', '文本模型请求'],
+  ['imageModelNames', '生图模型请求'],
+];
+
+function renderUsageGroups(target, usage, groups) {
+  target.innerHTML = `<div class="usage-grid">${groups.map(([key, label]) => {
     const rows = usage?.[key] || [];
     const body = rows.length
       ? `<table><thead><tr><th>取值</th><th>客户端</th><th>次数</th></tr></thead><tbody>${rows.map((row) => `
@@ -52,12 +55,21 @@ function renderConfigUsage(usage) {
   }).join('')}</div>`;
 }
 
-export async function loadConfigUsage() {
+async function loadUsage() {
   assertReady();
   await loadProjectOptions();
   saveSettings();
 
   const { projectName, days } = getEncodedProjectAndDays();
-  const data = await requestJson(`/api/config-usage?projectName=${projectName}&days=${days}`);
-  renderConfigUsage(data.usage || {});
+  return requestJson(`/api/config-usage?projectName=${projectName}&days=${days}`);
+}
+
+export async function loadConfigUsage() {
+  const data = await loadUsage();
+  renderUsageGroups(state.configUsage, data.usage || {}, configUsageGroups);
+}
+
+export async function loadModelUsage() {
+  const data = await loadUsage();
+  renderUsageGroups(state.modelUsage, data.usage || {}, modelUsageGroups);
 }

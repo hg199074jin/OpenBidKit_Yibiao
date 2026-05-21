@@ -63,6 +63,7 @@ export async function handleSummary(request, env, url) {
     SELECT
       blob4 AS version,
       COUNT(DISTINCT blob7) AS clients,
+      COUNT(DISTINCT CASE WHEN toDate(timestamp) = toDate(NOW()) THEN blob7 ELSE NULL END) AS todayClients,
       SUM(_sample_interval) AS count
     FROM ${DATASET}
     WHERE blob1 = ${project}
