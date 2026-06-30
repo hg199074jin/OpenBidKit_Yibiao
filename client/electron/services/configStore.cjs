@@ -228,6 +228,11 @@ const defaultConfig = {
   file_parser: {
     provider: 'local',
     mineru_token: '',
+    vision_model: {
+      base_url: '',
+      api_key: '',
+      model_name: '',
+    },
   },
   update_channel: 'github',
   gpu_hardware_acceleration_enabled: true,
@@ -604,6 +609,11 @@ function normalizeConfig(config) {
     file_parser: {
       provider: fileParser.provider || defaultConfig.file_parser.provider,
       mineru_token: fileParser.mineru_token || defaultConfig.file_parser.mineru_token,
+      vision_model: {
+        base_url: fileParser.vision_model?.base_url || defaultConfig.file_parser.vision_model.base_url,
+        api_key: fileParser.vision_model?.api_key || defaultConfig.file_parser.vision_model.api_key,
+        model_name: fileParser.vision_model?.model_name || defaultConfig.file_parser.vision_model.model_name,
+      },
     },
     update_channel: normalizeUpdateChannel(source.update_channel),
     gpu_hardware_acceleration_enabled: gpuHardwareAccelerationEnabled,

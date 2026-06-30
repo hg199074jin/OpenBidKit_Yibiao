@@ -1917,6 +1917,91 @@ function createAiService({ app, configStore }) {
         models: Array.isArray(data.data) ? data.data.map((item) => item.id).filter(Boolean) : [],
       };
     },
+
+    async listVisionModels(visionConfig) {
+      const baseUrl = trimBaseUrl(visionConfig?.base_url || '');
+      const apiKey = visionConfig?.api_key || '';
+
+      if (!apiKey) {
+        return { success: false, message: '请先填写视觉模型 API Key', models: [] };
+      }
+      if (!baseUrl) {
+        return { success: false, message: '请先填写视觉模型 Base URL', models: [] };
+      }
+
+      const data = await runWithAiRetry(async () => {
+        let response = null;
+        try {
+          response = await fetch(`${baseUrl}/models`, {
+            method: 'GET',
+            headers: createHeaders(apiKey),
+          });
+        } catch (error) {
+          throw markAiRequestError(error, { retryable: true });
+        }
+        await ensureOk(response, '获取视觉模型列表失败');
+        try {
+          return await response.json();
+        } catch (error) {
+          throw markAiRequestError(error, { retryable: true });
+        }
+      });
+
+      return {
+        success: true,
+        message: '视觉模型列表已更新',
+        models: Array.isArray(data.data) ? data.data.map((item) => item.id).filter(Boolean) : [],
+      };
+    },
+
+    async testVisionModel(visionConfig) {
+      const baseUrl = trimBaseUrl(visionConfig?.base_url || '');
+      const apiKey = visionConfig?.api_key || '';
+      const modelName = visionConfig?.model_name || '';
+
+      if (!apiKey) {
+        throw new Error('请先填写视觉模型 API Key');
+      }
+      if (!baseUrl) {
+        throw new Error('请先填写视觉模型 Base URL');
+      }
+      if (!modelName) {
+        throw new Error('请先填写视觉模型名称');
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30000);
+
+      try {
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: createHeaders(apiKey),
+          body: JSON.stringify({
+            model: modelName,
+            messages: [{ role: 'user', content: 'hi' }],
+            max_tokens: 32,
+            temperature: 0,
+          }),
+          signal: controller.signal,
+        });
+
+        await ensureTextAiResponseOk(response, '视觉模型测试失败');
+
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content || '';
+        return {
+          success: true,
+          message: content.trim() ? `测试成功：${content.trim().slice(0, 160)}` : '测试成功',
+        };
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          throw new Error('视觉模型测试超时，请检查 Base URL、API Key 或模型名称');
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
   };
 
   return service;

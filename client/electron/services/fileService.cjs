@@ -9,11 +9,13 @@ const { getImportedImagesDir } = require('../utils/paths.cjs');
 
 const parserLabels = {
   local: '本地解析',
+  'vision-llm': '视觉大模型解析',
   'mineru-accurate-api': 'MinerU 精准解析 API',
   'mineru-agent-api': 'MinerU-Agent 轻量解析 API',
 };
 
 const localSupportedExtensions = new Set(['.txt', '.md', '.markdown', '.docx', '.pdf', '.doc', '.wps']);
+const visionLlmSupportedExtensions = new Set(['.pdf']);
 const mineruAgentSupportedExtensions = new Set([
   '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.png', '.jpg', '.jpeg', '.jp2', '.webp', '.gif', '.bmp', '.xls', '.xlsx',
 ]);
@@ -35,6 +37,9 @@ function getSupportedExtensions(provider) {
   }
   if (provider === 'mineru-accurate-api') {
     return mineruAccurateSupportedExtensions;
+  }
+  if (provider === 'vision-llm') {
+    return visionLlmSupportedExtensions;
   }
   return localSupportedExtensions;
 }
@@ -524,6 +529,68 @@ async function parseDocumentWithConfig(app, filePath, config, options = {}) {
   const preserveImages = options.preserveImages === true;
   const assets = preserveImages ? createAssetContext(app, options.assetScope || 'documents') : null;
   const parseOptions = { preserveImages, assets, imageResolver: createImageResolver(assets) };
+
+  // vision-llm 模式：先尝试本地解析，失败（扫描件）再调视觉大模型
+  if (provider === 'vision-llm') {
+    try {
+      let markdown = await parseLocalDocument(filePath, parseOptions);
+      markdown = preserveImages ? await rewriteMarkdownImages(markdown, assets, { localBaseDir: path.dirname(filePath) }) : stripMarkdownImages(markdown);
+      const result = preserveImages ? markdown : stripMarkdownImages(markdown);
+      developerLogger.write('file.parse.completed', {
+        duration_ms: Date.now() - startedAt,
+        parser: summarizeParserForLog(parser, options),
+        asset_count: assets?.index || 0,
+        markdown_metrics: textMetrics(result),
+        note: 'local-parse-ok',
+      });
+      return result;
+    } catch (localError) {
+      const errorCode = localError?.code || localError?.details?.code;
+      if (errorCode !== 'pdf_text_layer_missing') {
+        await deleteImportedImageAssets(assets).catch(() => undefined);
+        developerLogger.write('file.parse.error', {
+          duration_ms: Date.now() - startedAt,
+          parser: summarizeParserForLog(parser, options),
+          error: compactLogError(localError),
+          note: 'local-parse-failed-non-scanned',
+        });
+        throw normalizeDocumentParseError(localError, filePath);
+      }
+      developerLogger.write('file.parse.fallback-to-vision', {
+        duration_ms: Date.now() - startedAt,
+        local_error: compactLogError(localError),
+      });
+    }
+
+    const { parseWithVisionModel } = require('./visionParser.cjs');
+    const visionConfig = config.file_parser?.vision_model || {};
+    try {
+      let markdown = await parseWithVisionModel(filePath, visionConfig, {
+        onProgress: options.onVisionProgress,
+      });
+      markdown = preserveImages ? await rewriteMarkdownImages(markdown, assets, { localBaseDir: path.dirname(filePath) }) : stripMarkdownImages(markdown);
+      const result = preserveImages ? markdown : stripMarkdownImages(markdown);
+      developerLogger.write('file.parse.completed', {
+        duration_ms: Date.now() - startedAt,
+        parser: summarizeParserForLog(parser, options),
+        asset_count: assets?.index || 0,
+        markdown_metrics: textMetrics(result),
+        note: 'vision-parse-ok',
+      });
+      return result;
+    } catch (visionError) {
+      await deleteImportedImageAssets(assets).catch(() => undefined);
+      developerLogger.write('file.parse.error', {
+        duration_ms: Date.now() - startedAt,
+        parser: summarizeParserForLog(parser, options),
+        error: compactLogError(visionError),
+        note: 'vision-parse-failed',
+      });
+      throw normalizeDocumentParseError(visionError, filePath);
+    }
+  }
+
+  // 其他解析方式（local、mineru-agent-api、mineru-accurate-api）
   let markdown = '';
   try {
     if (provider === 'mineru-agent-api') {

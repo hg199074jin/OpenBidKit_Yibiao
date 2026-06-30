@@ -57,11 +57,18 @@ export interface ImageModelConfig {
 
 export type ImageModelProfiles = Record<ImageModelProvider, ImageModelConfig>;
 
-export type FileParserProvider = 'local' | 'mineru-accurate-api' | 'mineru-agent-api';
+export type FileParserProvider = 'local' | 'vision-llm' | 'mineru-accurate-api' | 'mineru-agent-api';
+
+export interface VisionModelConfig {
+  base_url: string;
+  api_key: string;
+  model_name: string;
+}
 
 export interface FileParserConfig {
   provider: FileParserProvider;
   mineru_token?: string;
+  vision_model?: VisionModelConfig;
 }
 
 export interface ClientConfig extends AiConfig {

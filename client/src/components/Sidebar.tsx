@@ -19,7 +19,6 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'knowledge-base': ArchiveIcon,
   'document-knowledge-base': ArchiveIcon,
   'image-knowledge-base': ArchiveIcon,
-  resources: ResourcesIcon,
   'bid-check': BidCheckIcon,
   'duplicate-check': CompareIcon,
   'rejection-check': ShieldIcon,
@@ -28,7 +27,6 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'my-templates': DocumentIcon,
   'new-template': DocumentIcon,
   'export-format': DocumentIcon,
-  'bid-opportunity': RadarIcon,
   'developer-test': FlaskIcon,
   'developer-json-test': FlaskIcon,
   'developer-prompt-lab': FlaskIcon,
@@ -210,17 +208,6 @@ function ArchiveIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function ResourcesIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
-      <path d="M4.8 6.4h4v12.2h-4z" />
-      <path d="M10.1 4.8h4.2v13.8h-4.2z" />
-      <path d="m15.4 7.1 3.4-.9 2.7 10.8-3.4.85z" />
-      <path d="M4 19.3h16.8" />
-    </svg>
-  );
-}
-
 function BidCheckIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
@@ -253,17 +240,6 @@ function ShieldIcon(props: SVGProps<SVGSVGElement>) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
       <path d="M12 3.5 18.5 6v5.4c0 4.25-2.55 7.55-6.5 9.1-3.95-1.55-6.5-4.85-6.5-9.1V6z" />
       <path d="m9 12.2 2 2 4-4.5" />
-    </svg>
-  );
-}
-
-function RadarIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
-      <path d="M12 20.5a8.5 8.5 0 1 0 0-17 8.5 8.5 0 0 0 0 17Z" />
-      <path d="M12 16.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Z" />
-      <path d="M12 12 18 6" />
-      <path d="M12 12h.01" />
     </svg>
   );
 }

@@ -47,6 +47,8 @@ const bridge = {
     chat: (request) => ipcRenderer.invoke('ai:chat', request),
     requestJson: (request) => ipcRenderer.invoke('ai:request-json', request),
     testImageModel: (config) => ipcRenderer.invoke('ai:test-image-model', config),
+    listVisionModels: (visionConfig) => ipcRenderer.invoke('ai:list-vision-models', visionConfig),
+    testVisionModel: (visionConfig) => ipcRenderer.invoke('ai:test-vision-model', visionConfig),
   },
   agent: {
     run: (payload) => ipcRenderer.invoke('agent:run', payload),

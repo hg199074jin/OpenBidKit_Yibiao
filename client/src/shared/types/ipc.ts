@@ -1,6 +1,6 @@
 import type { ChatCompletionRequest, JsonCompletionRequest } from './ai';
 import type { DuplicateCheckWorkspaceState, FileSelectionResult } from './bid';
-import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult, UpdateChannel } from './config';
+import type { ClientConfig, ConfigSaveResult, ImageModelTestResult, ModelListResult, UpdateChannel, VisionModelConfig } from './config';
 import type { KnowledgeAnalysisSnapshot, KnowledgeBaseEvent, KnowledgeBaseIndex, KnowledgeBaseIndexMutationResult, KnowledgeBaseMigrationResult, KnowledgeBaseMigrationStatus, KnowledgeBaseMutationResult, KnowledgeBaseRetryDocumentResult, KnowledgeBaseStartMatchingResult, KnowledgeBaseUploadResult, KnowledgeDocument, KnowledgeFolder, KnowledgeItem } from '../../features/knowledge-base/types';
 import type { RejectionCheckWorkspaceState, RejectionDocumentRole } from '../../features/rejection-check/types';
 import type { BidAnalysisMode, BidAnalysisTaskState, BidSectionMode, ContentGenerationOptions, ContentGenerationPlanState, ContentGenerationRuntimeState, ContentGenerationSectionState, DetectedBidSection, GlobalFactGroupState, SaveOutlineRequest, TechnicalPlanState, TechnicalPlanStep, TechnicalPlanWorkflowKind } from '../../features/technical-plan/types';
@@ -278,6 +278,8 @@ export interface YibiaoBridge {
     chat: (request: ChatCompletionRequest) => Promise<string>;
     requestJson: <TResult = unknown>(request: JsonCompletionRequest) => Promise<TResult>;
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
+    listVisionModels: (visionConfig: VisionModelConfig) => Promise<ModelListResult>;
+    testVisionModel: (visionConfig: VisionModelConfig) => Promise<{ success: boolean; message: string }>;
   };
   agent: {
     run: (payload: AgentRunPayload) => Promise<AgentRunResult>;

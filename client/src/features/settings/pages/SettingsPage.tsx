@@ -380,6 +380,7 @@ function formatImageTestTime(value?: string) {
 
 const fileParserProviders: Array<{ value: FileParserProvider; label: string }> = [
   { value: 'local', label: '本地解析' },
+  { value: 'vision-llm', label: '视觉大模型解析' },
   { value: 'mineru-accurate-api', label: 'MinerU-精准解析 API' },
   { value: 'mineru-agent-api', label: 'MinerU-Agent 轻量解析 API' },
 ];
@@ -397,6 +398,20 @@ const parserOptions = [
       ['大小/页数', '无限制'],
       ['解析质量', '高'],
       ['扫描件', '不支持'],
+    ],
+  },
+  {
+    title: '视觉大模型解析',
+    badge: '扫描件智能识别',
+    tone: 'accent',
+    summary: '本地解析失败时自动调用视觉大模型逐页识别，适合扫描件 PDF。',
+    items: [
+      ['Token', '需要配置 API Key'],
+      ['解析速度', '中等（逐页识别）'],
+      ['支持格式', 'pdf'],
+      ['大小/页数', '取决于模型'],
+      ['解析质量', '高'],
+      ['扫描件', '支持'],
     ],
   },
   {
@@ -442,6 +457,11 @@ const initialState: SettingsPageState = {
   fileParser: {
     provider: 'local',
     mineru_token: '',
+    vision_model: {
+      base_url: '',
+      api_key: '',
+      model_name: '',
+    },
   },
   general: {
     developer_mode: false,
@@ -462,9 +482,11 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
   const [savedConfig, setSavedConfig] = useState<ClientConfig | null>(null);
   const [textModels, setTextModels] = useState<string[]>([]);
   const [imageModels, setImageModels] = useState<string[]>([]);
-  const [loadingModels, setLoadingModels] = useState<'text' | 'image' | null>(null);
+  const [loadingModels, setLoadingModels] = useState<'text' | 'image' | 'vision' | null>(null);
   const [testingTextModel, setTestingTextModel] = useState(false);
   const [testingImageModel, setTestingImageModel] = useState(false);
+  const [testingVisionModel, setTestingVisionModel] = useState(false);
+  const [visionModels, setVisionModels] = useState<string[]>([]);
   const [imageTestPreview, setImageTestPreview] = useState<{ src: string; title: string } | null>(null);
   const [appVersion, setAppVersion] = useState('');
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
@@ -530,6 +552,11 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
         fileParser: {
           provider: config.file_parser.provider,
           mineru_token: config.file_parser.mineru_token || '',
+          vision_model: {
+            base_url: config.file_parser.vision_model?.base_url || '',
+            api_key: config.file_parser.vision_model?.api_key || '',
+            model_name: config.file_parser.vision_model?.model_name || '',
+          },
         },
         general: {
           developer_mode: Boolean(config.developer_mode),
@@ -577,6 +604,11 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       file_parser: {
         provider: state.fileParser.provider,
         mineru_token: state.fileParser.mineru_token || '',
+        vision_model: {
+          base_url: state.fileParser.vision_model?.base_url || '',
+          api_key: state.fileParser.vision_model?.api_key || '',
+          model_name: state.fileParser.vision_model?.model_name || '',
+        },
       },
       update_channel: state.general.update_channel,
       gpu_hardware_acceleration_enabled: state.general.gpu_hardware_acceleration_enabled,
@@ -821,6 +853,51 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
       showToast(error instanceof Error ? error.message : '测试失败', 'error');
     } finally {
       setTestingTextModel(false);
+    }
+  };
+
+  const fetchVisionModels = async () => {
+    try {
+      setLoadingModels('vision');
+      const visionConfig = state.fileParser.vision_model || { base_url: '', api_key: '', model_name: '' };
+      const result = await window.yibiao?.ai.listVisionModels(visionConfig);
+      const models = result?.models || [];
+      setVisionModels(models);
+      if (result?.success && models.length > 0) {
+        setState((prev) => {
+          const currentName = prev.fileParser.vision_model?.model_name || '';
+          const nextName = models.includes(currentName) ? currentName : models[0];
+          return {
+            ...prev,
+            fileParser: {
+              ...prev.fileParser,
+              vision_model: {
+                base_url: prev.fileParser.vision_model?.base_url || '',
+                api_key: prev.fileParser.vision_model?.api_key || '',
+                model_name: nextName,
+              },
+            },
+          };
+        });
+      }
+      showToast(result?.message || `获取到 ${result?.models.length || 0} 个视觉模型`, result?.success ? 'success' : 'info');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '获取视觉模型列表失败', 'error');
+    } finally {
+      setLoadingModels(null);
+    }
+  };
+
+  const testVisionConfig = async () => {
+    try {
+      setTestingVisionModel(true);
+      const visionConfig = state.fileParser.vision_model || { base_url: '', api_key: '', model_name: '' };
+      const result = await window.yibiao?.ai.testVisionModel(visionConfig);
+      showToast(result?.message || '测试成功', result?.success ? 'success' : 'info');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '视觉模型测试失败', 'error');
+    } finally {
+      setTestingVisionModel(false);
     }
   };
 
@@ -1752,6 +1829,110 @@ function SettingsPage({ onDeveloperModeChange }: SettingsPageProps) {
                   }))}
                 />
               </label>
+            )}
+            {state.fileParser.provider === 'vision-llm' && (
+              <>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>视觉模型 Base URL</strong>
+                    <span>OpenAI 兼容接口地址，如 https://api.openai.com/v1</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={state.fileParser.vision_model?.base_url || ''}
+                    placeholder="https://api.openai.com/v1"
+                    onChange={(event) => setState((prev) => ({
+                      ...prev,
+                      fileParser: {
+                        ...prev.fileParser,
+                        vision_model: {
+                          base_url: event.target.value,
+                          api_key: prev.fileParser.vision_model?.api_key || '',
+                          model_name: prev.fileParser.vision_model?.model_name || '',
+                        },
+                      },
+                    }))}
+                  />
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>视觉模型 API Key</strong>
+                    <span>支持图片输入的模型 API Key</span>
+                  </div>
+                  <input
+                    type="password"
+                    value={state.fileParser.vision_model?.api_key || ''}
+                    placeholder="请输入 API Key"
+                    onChange={(event) => setState((prev) => ({
+                      ...prev,
+                      fileParser: {
+                        ...prev.fileParser,
+                        vision_model: {
+                          base_url: prev.fileParser.vision_model?.base_url || '',
+                          api_key: event.target.value,
+                          model_name: prev.fileParser.vision_model?.model_name || '',
+                        },
+                      },
+                    }))}
+                  />
+                </label>
+                <label className="settings-row">
+                  <div className="settings-row-copy">
+                    <strong>视觉模型名称</strong>
+                    <span>支持图片输入的模型，如 gpt-4o、claude-sonnet-4-20250514</span>
+                  </div>
+                  <div className="settings-control-with-action">
+                    {visionModels.length > 0 ? (
+                      <select
+                        value={state.fileParser.vision_model?.model_name || ''}
+                        onChange={(event) => setState((prev) => ({
+                          ...prev,
+                          fileParser: {
+                            ...prev.fileParser,
+                            vision_model: {
+                              base_url: prev.fileParser.vision_model?.base_url || '',
+                              api_key: prev.fileParser.vision_model?.api_key || '',
+                              model_name: event.target.value,
+                            },
+                          },
+                        }))}
+                      >
+                        {visionModels.map((model) => <option value={model} key={model}>{model}</option>)}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={state.fileParser.vision_model?.model_name || ''}
+                        placeholder="gpt-4o"
+                        onChange={(event) => setState((prev) => ({
+                          ...prev,
+                          fileParser: {
+                            ...prev.fileParser,
+                            vision_model: {
+                              base_url: prev.fileParser.vision_model?.base_url || '',
+                              api_key: prev.fileParser.vision_model?.api_key || '',
+                              model_name: event.target.value,
+                            },
+                          },
+                        }))}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      className="inline-action"
+                      onClick={fetchVisionModels}
+                      disabled={loadingModels === 'vision'}
+                    >
+                      {loadingModels === 'vision' && <span className="inline-spinner" aria-hidden="true" />}
+                      {loadingModels === 'vision' ? '获取中' : '获取'}
+                    </button>
+                    <button type="button" className="inline-action" onClick={testVisionConfig} disabled={testingVisionModel}>
+                      {testingVisionModel && <span className="inline-spinner" aria-hidden="true" />}
+                      {testingVisionModel ? '测试中' : '测试'}
+                    </button>
+                  </div>
+                </label>
+              </>
             )}
           </div>
 
